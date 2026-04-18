@@ -29,7 +29,7 @@ SEED = 42
 random.seed(SEED)
 
 # Caminhos base do projeto (relativo à localização deste script)
-BASE = Path(__file__).parent
+BASE = Path(__file__).parent.parent
 DADOS = BASE / "dados"
 IMAGENS = BASE / "imagens"
 DADOS.mkdir(exist_ok=True)
