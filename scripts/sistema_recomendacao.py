@@ -223,10 +223,12 @@ print(avaliacoes_por_perfume.groupby('genero')['total_avaliacoes'].mean().round(
 
 # Primeiro a ideia é criar o vetor corpus para que o TF-IDF consiga transformar os perfumes em vetores.
 #  Essa transformação precisa juntar os textos das colunas familia_olfativa, notas_olfativas, ocasiao e genero.
+
 # %% [markdown]
 
 # As colunas marca e nome servirão apenas para visualização na interface e a coluna preço servirá como filtro mais futuramente.
 #  Como o TF-IDF recebe somente texto e o preço é um dado do tipo float, ele não pode entrar nesse vetor corpus.
+
 # %%
 import unicodedata
 
@@ -268,17 +270,13 @@ df_produtos['corpus'].head()
 
 # %%
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 vectorizer = TfidfVectorizer()
 vectorized = vectorizer.fit_transform(df_produtos['corpus'])
 
-# %%
-from sklearn.metrics.pairwise import cosine_similarity
-
+# matriz de similaridade de cosseno entre os 50 perfumes (50×50)
 matriz_similaridade = cosine_similarity(vectorized)
-print(matriz_similaridade)
-
-# %%
 
 print(f"Matriz TF-IDF: {vectorized.shape}")
 print(f"Matriz de similaridade: {matriz_similaridade.shape}")
@@ -311,72 +309,152 @@ resultado
 # os perfumes retornados compartilham família olfativa amadeirado aromático e notas como
 # bergamota e cedro.
 
+# %% [markdown]
+# ### 3.2 NMF — Filtragem colaborativa
+
 # %%
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.decomposition import NMF
 import numpy as np
 
+# converte a matriz para float pois o NMF exige valores decimais
 matrix = df_matriz.values.astype(float)
 
-# separação treino/teste
+# divide os 500 usuários: 400 para treino (80%) e 100 para teste (20%)
+# random_state garante que a divisão seja sempre a mesma
 train_raw, test_raw = train_test_split(matrix, test_size=0.2, random_state=42)
 
 # %%
-from sklearn.decomposition import NMF
 
+# --- Etapa 1: NMF com zeros ---
+# zeros são tratados como nota 0 (não avaliado vira avaliação ruim)
+# n_components=20: número de fatores latentes que o modelo vai aprender
 nmf = NMF(n_components=20, random_state=42, max_iter=500)
-W_train = nmf.fit_transform(train_raw)
-W_test  = nmf.transform(test_raw)
+W_train = nmf.fit_transform(train_raw)  # aprende os fatores com os dados de treino
+W_test  = nmf.transform(test_raw)       # projeta os usuários de teste no mesmo espaço
 
-pred_test= np.dot(W_test, nmf.components_)
+# reconstrói as previsões e calcula o erro médio (RMSE)
+pred_test = np.dot(W_test, nmf.components_)
 rmse = np.sqrt(mean_squared_error(test_raw, pred_test))
 print(f"RMSE com zeros: {rmse:.4f}")
 
 # %%
 
+# aplica o modelo treinado na matriz completa para comparar previsão vs real
 W_full = nmf.transform(matrix)
 pred_full = np.dot(W_full, nmf.components_)
 df_pred = pd.DataFrame(pred_full, columns=df_matriz.columns, index=df_matriz.index)
 
 usuario = 'u1'
 comparacao = pd.DataFrame({
-      'real': df_matriz.loc[usuario],
-      'previsto': df_pred.loc[usuario].round(2)
+    'real': df_matriz.loc[usuario],
+    'previsto': df_pred.loc[usuario].round(2)
 })
-comparacao[comparacao_zeros['real'] > 0].sort_values('real', ascending=False)
+comparacao[comparacao['real'] > 0].sort_values('real', ascending=False)
 
 # %%
 
 def preencher_media(mat):
-      m = mat.copy()
-      contagem = (m != 0).sum(axis=1)
-      soma = m.sum(axis=1)
-      means = np.divide(soma, contagem, out=np.zeros_like(soma), where=contagem != 0)
-      for i, mean in enumerate(means):
-          m[i][m[i] == 0] = mean
-      return m
+    m = mat.copy()
+    contagem = (m != 0).sum(axis=1)
+    soma = m.sum(axis=1)
+    # divide soma por contagem, evitando divisão por zero para usuários silenciosos
+    means = np.divide(soma, contagem, out=np.zeros_like(soma), where=contagem != 0)
+    for i, mean in enumerate(means):
+        m[i][m[i] == 0] = mean  # substitui zeros pela média do usuário
+    return m
 
+# --- Etapa 2: NMF com zeros substituídos pela média do usuário ---
+# evita que ausência de avaliação seja interpretada como nota ruim
 train_filled = preencher_media(train_raw)
 test_filled  = preencher_media(test_raw)
 
-nmf_final = NMF(n_components=20, random_state=42)
-W_train = nmf_final.fit_transform(train_filled)
+nmf_final = NMF(n_components=20, random_state=42, max_iter=500)
+W_train = nmf_final.fit_transform(train_filled)  # treina com zeros preenchidos
 W_test  = nmf_final.transform(test_filled)
 
 pred_test_filled = np.dot(W_test, nmf_final.components_)
 rmse_filled = np.sqrt(mean_squared_error(test_filled, pred_test_filled))
 print(f"RMSE com zeros substituídos: {rmse_filled:.4f}")
 
-# %% 
+# %%
+
+# reconstrói a matriz completa com o modelo final para uso nas recomendações
 matrix_filled = preencher_media(matrix)
 W_full = nmf_final.transform(matrix_filled)
 predicted_full = np.dot(W_full, nmf_final.components_)
 df_predicted = pd.DataFrame(predicted_full, columns=df_matriz.columns, index=df_matriz.index)
 
 comparacao_filled = pd.DataFrame({
-      'real': df_matriz.loc[usuario],
-      'previsto': df_predicted.loc[usuario].round(2)
+    'real': df_matriz.loc[usuario],
+    'previsto': df_predicted.loc[usuario].round(2)
 })
 comparacao_filled[comparacao_filled['real'] > 0].sort_values('real', ascending=False)
 
+# %% [markdown]
+# ### 3.3 Pipeline de recomendação híbrida
+#
+# 1. O usuário informa suas preferências (família olfativa, ocasião, faixa de preço)
+# 2. **TF-IDF** gera os 20 perfumes candidatos mais similares ao perfil
+# 3. **NMF** reordena os candidatos usando as notas previstas de usuários similares
+# 4. Retorna os **top-5** finais com peso 70% TF-IDF + 30% NMF
+
 # %%
+def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, top_n=5):
+
+    # TF-IDF: gera score de conteúdo para o perfil do usuário
+    perfil = " ".join(familias_pref) + " " + clean_text(ocasiao_pref) + " " + clean_text(genero_pref)
+    perfil_vec = vectorizer.transform([perfil])
+    scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
+
+    # filtro de gênero
+    mask = df_produtos['genero'].isin([clean_text(genero_pref), 'unissex'])
+
+    # filtro de preço
+    if faixa_preco == 'ate_100':
+        mask &= df_produtos['preco'] <= 100
+    elif faixa_preco == '100_200':
+        mask &= (df_produtos['preco'] > 100) & (df_produtos['preco'] <= 200)
+    elif faixa_preco == '200_300':
+        mask &= (df_produtos['preco'] > 200) & (df_produtos['preco'] <= 300)
+    else:
+        mask &= df_produtos['preco'] > 300
+
+    # se nenhum perfume passar no filtro de preço, ignora o filtro
+    if mask.sum() == 0:
+        mask = df_produtos['genero'].isin([clean_text(genero_pref), 'unissex'])
+
+    # top-20 candidatos pelo TF-IDF
+    indices = df_produtos[mask].index.tolist()
+    candidatos = sorted([(i, scores_tfidf[i]) for i in indices],
+                        key=lambda x: x[1], reverse=True)[:20]
+    top20 = [i for i, _ in candidatos]
+
+    # NMF: média das predições de todos os usuários para cada candidato
+    nmf_scores = df_predicted.iloc[:, top20].mean(axis=0).values
+
+    # combinação: 70% TF-IDF + 30% NMF (normalizado para 0-1)
+    resultado = []
+    for rank, idx in enumerate(top20):
+        tfidf_s = scores_tfidf[idx]
+        nmf_s = (nmf_scores[rank] - 1) / 4  # normaliza 1-5 → 0-1
+        final = 0.7 * tfidf_s + 0.3 * nmf_s
+        resultado.append((idx, final, nmf_scores[rank]))
+
+    resultado.sort(key=lambda x: x[1], reverse=True)
+
+    print(f"\n{'='*60}")
+    print(f"Recomendações — {', '.join(familias_pref)} | {ocasiao_pref} | {genero_pref}")
+    print(f"{'='*60}")
+    for i, (idx, score, nota) in enumerate(resultado[:top_n], 1):
+        row = df_produtos.iloc[idx]
+        print(f"  {i}. {row['nome']} ({row['marca']}) — R${row['preco']:.2f}")
+        print(f"     Família: {row['familia_olfativa']} | Nota NMF: {nota:.1f} | Score: {score:.3f}")
+
+    return resultado[:top_n]
+
+# %%
+
+# teste do pipeline
+recomendar_hibrido(['amadeirado aromatico'], 'noturno-formal', 'masculino', '100_200')
