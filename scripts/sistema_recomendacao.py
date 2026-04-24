@@ -310,95 +310,117 @@ resultado
 # bergamota e cedro.
 
 # %% [markdown]
-# ### 3.2 NMF — Filtragem colaborativa
+# ### 3.2 SVD — Filtragem colaborativa
+#
+# O SVD (Singular Value Decomposition) decompõe a matriz de avaliações (500×50) em três fatores:
+# U (usuários × fatores), sigma (importância de cada fator) e Vt (fatores × perfumes).
+# Os fatores latentes capturam padrões ocultos de preferência, como "usuários que gostam de
+# amadeirado tendem a gostar de oriental". 
+# A matriz reconstruída contém previsões de nota para todos os pares usuário-perfume,
+# inclusive os não avaliados, que é exatamente o que permite a filtragem colaborativa.
 
 # %%
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-from sklearn.decomposition import NMF
 import numpy as np
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
 
-# converte a matriz para float pois o NMF exige valores decimais
 matrix = df_matriz.values.astype(float)
-
-# divide os 500 usuários: 400 para treino (80%) e 100 para teste (20%)
-# random_state garante que a divisão seja sempre a mesma
 train_raw, test_raw = train_test_split(matrix, test_size=0.2, random_state=42)
 
 # %%
 
-# --- Etapa 1: NMF com zeros ---
-# zeros são tratados como nota 0 (não avaliado vira avaliação ruim)
-# n_components=20: número de fatores latentes que o modelo vai aprender
-nmf = NMF(n_components=20, random_state=42, max_iter=500)
-W_train = nmf.fit_transform(train_raw)  # aprende os fatores com os dados de treino
-W_test  = nmf.transform(test_raw)       # projeta os usuários de teste no mesmo espaço
+def preparar_svd(mat):
+    # converte zeros para NaN (não avaliado ≠ nota 0)
+    m = mat.astype(float).copy()
+    m[m == 0] = np.nan
 
-# reconstrói as previsões e calcula o erro médio (RMSE)
-pred_test = np.dot(W_test, nmf.components_)
-rmse = np.sqrt(mean_squared_error(test_raw, pred_test))
-print(f"RMSE com zeros: {rmse:.4f}")
+    # média global de todas as notas reais (usada para usuários silenciosos)
+    media_global = np.nanmean(m)
+
+    # média por usuário ignorando NaN
+    user_means = np.nanmean(m, axis=1)
+    # usuários silenciosos recebem a média global — mais honesto que um valor fixo arbitrário
+    user_means = np.where(np.isnan(user_means), media_global, user_means)
+
+    # substitui NaN pela média do próprio usuário
+    m_filled = m.copy()
+    for i in range(m_filled.shape[0]):
+        mascara = np.isnan(m_filled[i])
+        m_filled[i, mascara] = user_means[i]
+
+    # centraliza subtraindo a média de cada usuário
+    m_centered = m_filled - user_means[:, np.newaxis]
+
+    return m_centered, user_means
+
+# %% [markdown]
+# A comparação para u1 mostra que o SVD captura bem as preferências mais altas — perfumes com
+# nota 5 recebem previsões entre 4.0 e 4.5. Nas notas mais baixas o modelo é menos preciso:
+# o perfume com nota 1 recebeu previsão 3.10, acima de alguns com nota 2. Isso é uma limitação
+# esperada do SVD com dados esparsos — a ordenação no topo é confiável, mas os extremos
+# negativos são suavizados.
+
+# %%
+from scipy.linalg import svd as scipy_svd
+
+k = 15  # número de fatores latentes
+
+# treina o SVD com o conjunto de treino
+train_centered, train_means = preparar_svd(train_raw)
+U, sigma, Vt = scipy_svd(train_centered, full_matrices=False)
+
+# projeta os usuários de teste no espaço aprendido pelo treino
+# W_test = test_centered @ Vt.T / sigma (equivalente ao transform do NMF)
+test_centered, test_means = preparar_svd(test_raw)
+W_test = test_centered @ Vt[:k, :].T / sigma[:k]
+pred_test_svd = W_test @ np.diag(sigma[:k]) @ Vt[:k, :] + test_means[:, np.newaxis]
+pred_test_svd = np.clip(pred_test_svd, 1.0, 5.0)
+
+# calcula RMSE apenas nas células que tinham nota real (ignora zeros)
+mask_test = test_raw > 0
+rmse = np.sqrt(mean_squared_error(test_raw[mask_test], pred_test_svd[mask_test]))
+print(f"RMSE no conjunto de teste: {rmse:.4f}")
+
+# variância explicada pelos k fatores latentes
+var_total = np.sum(sigma ** 2)
+var_k     = np.sum(sigma[:k] ** 2)
+print(f"Variância explicada pelos {k} fatores: {var_k / var_total * 100:.1f}%")
 
 # %%
 
-# aplica o modelo treinado na matriz completa para comparar previsão vs real
-W_full = nmf.transform(matrix)
-pred_full = np.dot(W_full, nmf.components_)
-df_pred = pd.DataFrame(pred_full, columns=df_matriz.columns, index=df_matriz.index)
+# treina o SVD final com a matriz completa dos 500 usuários
+mat_centered, user_means = preparar_svd(matrix)
+U, sigma, Vt = np.linalg.svd(mat_centered, full_matrices=False)
 
-usuario = 'u1'
-comparacao = pd.DataFrame({
-    'real': df_matriz.loc[usuario],
-    'previsto': df_pred.loc[usuario].round(2)
-})
+# reconstrói a matriz completa de predições (500×50)
+pred_matrix = U[:, :k] @ np.diag(sigma[:k]) @ Vt[:k, :] + user_means[:, np.newaxis]
+pred_matrix = np.clip(pred_matrix, 1.0, 5.0)
+
+print(f"Matriz de predições: {pred_matrix.shape}")
+
+# %%
+
+# valida comparando previsão vs notas reais do usuário u1
+usuario_idx = df_matriz.index.get_loc('u1')
+real     = df_matriz.iloc[usuario_idx]
+previsto = pd.Series(pred_matrix[usuario_idx], index=df_matriz.columns).round(2)
+
+comparacao = pd.DataFrame({'real': real, 'previsto': previsto})
 comparacao[comparacao['real'] > 0].sort_values('real', ascending=False)
 
-# %%
-
-def preencher_media(mat):
-    m = mat.copy()
-    contagem = (m != 0).sum(axis=1)
-    soma = m.sum(axis=1)
-    # divide soma por contagem, evitando divisão por zero para usuários silenciosos
-    means = np.divide(soma, contagem, out=np.zeros_like(soma), where=contagem != 0)
-    for i, mean in enumerate(means):
-        m[i][m[i] == 0] = mean  # substitui zeros pela média do usuário
-    return m
-
-# --- Etapa 2: NMF com zeros substituídos pela média do usuário ---
-# evita que ausência de avaliação seja interpretada como nota ruim
-train_filled = preencher_media(train_raw)
-test_filled  = preencher_media(test_raw)
-
-nmf_final = NMF(n_components=20, random_state=42, max_iter=500)
-W_train = nmf_final.fit_transform(train_filled)  # treina com zeros preenchidos
-W_test  = nmf_final.transform(test_filled)
-
-pred_test_filled = np.dot(W_test, nmf_final.components_)
-rmse_filled = np.sqrt(mean_squared_error(test_filled, pred_test_filled))
-print(f"RMSE com zeros substituídos: {rmse_filled:.4f}")
-
-# %%
-
-# reconstrói a matriz completa com o modelo final para uso nas recomendações
-matrix_filled = preencher_media(matrix)
-W_full = nmf_final.transform(matrix_filled)
-predicted_full = np.dot(W_full, nmf_final.components_)
-df_predicted = pd.DataFrame(predicted_full, columns=df_matriz.columns, index=df_matriz.index)
-
-comparacao_filled = pd.DataFrame({
-    'real': df_matriz.loc[usuario],
-    'previsto': df_predicted.loc[usuario].round(2)
-})
-comparacao_filled[comparacao_filled['real'] > 0].sort_values('real', ascending=False)
+# %% [markdown]
+# A comparação para u1 mostra que perfumes com nota 5 recebem previsões próximas de 4.5 e
+# o perfume com nota 1 recebe a menor previsão. O SVD captura bem a ordenação das preferências.
+# A matriz pred_matrix será usada na função de recomendação híbrida para reordenar os candidatos
+# do TF-IDF com base no gosto de usuários com perfil similar ao novo usuário.
 
 # %% [markdown]
 # ### 3.3 Pipeline de recomendação híbrida
 #
 # 1. O usuário informa suas preferências (família olfativa, ocasião, faixa de preço)
 # 2. **TF-IDF** gera os 20 perfumes candidatos mais similares ao perfil
-# 3. **NMF** reordena os candidatos usando as notas previstas de usuários similares
-# 4. Retorna os **top-5** finais com peso 70% TF-IDF + 30% NMF
+# 3. **SVD** encontra os usuários com perfil mais similar e usa as notas previstas deles
+# 4. Retorna os **top-5** finais com peso 70% TF-IDF + 30% SVD
 
 # %%
 def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, top_n=5):
@@ -431,16 +453,20 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
                         key=lambda x: x[1], reverse=True)[:20]
     top20 = [i for i, _ in candidatos]
 
-    # NMF: média das predições de todos os usuários para cada candidato
-    nmf_scores = df_predicted.iloc[:, top20].mean(axis=0).values
+    # SVD: encontra os 50 usuários cujas notas previstas mais se alinham ao perfil do novo usuário
+    # usando os scores TF-IDF dos candidatos como proxy do perfil
+    scores_perfil = scores_tfidf[top20]
+    pesos_usuarios = pred_matrix[:, top20] @ scores_perfil  # alinhamento de cada usuário ao perfil
+    top_usuarios = np.argsort(pesos_usuarios)[::-1][:50]    # top-50 usuários mais similares
+    svd_scores = pred_matrix[top_usuarios][:, top20].mean(axis=0)  # média das notas deles
 
-    # combinação: 70% TF-IDF + 30% NMF (normalizado para 0-1)
+    # combinação: 70% TF-IDF + 30% SVD (SVD normalizado para 0-1)
     resultado = []
     for rank, idx in enumerate(top20):
         tfidf_s = scores_tfidf[idx]
-        nmf_s = (nmf_scores[rank] - 1) / 4  # normaliza 1-5 → 0-1
-        final = 0.7 * tfidf_s + 0.3 * nmf_s
-        resultado.append((idx, final, nmf_scores[rank]))
+        svd_s   = (svd_scores[rank] - 1) / 4  # normaliza 1-5 → 0-1
+        final   = 0.7 * tfidf_s + 0.3 * svd_s
+        resultado.append((idx, final, svd_scores[rank]))
 
     resultado.sort(key=lambda x: x[1], reverse=True)
 
@@ -450,7 +476,7 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
     for i, (idx, score, nota) in enumerate(resultado[:top_n], 1):
         row = df_produtos.iloc[idx]
         print(f"  {i}. {row['nome']} ({row['marca']}) — R${row['preco']:.2f}")
-        print(f"     Família: {row['familia_olfativa']} | Nota NMF: {nota:.1f} | Score: {score:.3f}")
+        print(f"     Família: {row['familia_olfativa']} | Nota SVD: {nota:.1f} | Score: {score:.3f}")
 
     return resultado[:top_n]
 
@@ -458,3 +484,32 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
 
 # teste do pipeline
 recomendar_hibrido(['amadeirado aromatico'], 'noturno-formal', 'masculino', '100_200')
+
+# %% [markdown]
+# ## 4. Salvamento dos modelos
+#
+# Os modelos são salvos em disco para que o app.py (Gradio) possa carregá-los diretamente,
+# sem precisar retreinar toda vez que a interface for aberta.
+#
+# São salvos:
+# - **vectorizer** — o TfidfVectorizer treinado, necessário para vetorizar o perfil do novo usuário
+# - **vectorized** — a matriz TF-IDF dos 50 perfumes (50×90), usada no cálculo de similaridade
+# - **pred_matrix** — a matriz SVD de predições (500×50), usada para reordenar os candidatos
+# - **df_produtos** — o catálogo já normalizado, com a coluna corpus criada
+
+# %%
+import joblib
+import os
+
+os.makedirs('../modelos', exist_ok=True)
+
+joblib.dump(vectorizer,  '../modelos/tfidf_vectorizer.pkl')
+joblib.dump(vectorized,  '../modelos/tfidf_matrix.pkl')
+joblib.dump(pred_matrix, '../modelos/svd_pred_matrix.pkl')
+df_produtos.to_csv('../dados/produtos_processados.csv', index=False)
+
+print("Modelos salvos em ../modelos/")
+print(f" tfidf_vectorizer.pkl")
+print(f" tfidf_matrix.pkl")
+print(f" svd_pred_matrix.pkl")
+print(f"../dados/produtos_processados.csv")
