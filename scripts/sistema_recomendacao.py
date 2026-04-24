@@ -71,7 +71,7 @@ plt.show()
 
 # %% [markdown]
 # Boticário e Natura dominam aparecem mais vezes no catálogo.
-# Avon contribui com 7 perfumes, Eudora com 4, e Mahogany, Granado e Phebo com 2 cada.
+# Avon contribui com 7 perfumes, Eudora com 4, Mahogany com 2, Granado e Phebo com 1 cada.
 
 # %%
 # agrupando perfume por familia olfativa para plotar
@@ -89,7 +89,7 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# O catálogo é bastante diversificado: 22 famílias olfativas diferentes. As mais representadas são
+# O catálogo é bastante diversificado: 23 famílias olfativas diferentes. As mais representadas são
 # amadeirado aromático e floral. A maioria das famílias porém aparece apenas uma vez
 
 # %%
@@ -206,7 +206,9 @@ print('Média de avaliações por gênero')
 print(avaliacoes_por_perfume.groupby('genero')['total_avaliacoes'].mean().round(1))
 # %%[markdown]
 
-# A média de avaliações por gênero mostra se há diferença de engajamento entre perfumes femininos e masculinos.
+# Perfumes femininos recebem em média 124,6 avaliações contra 111,0 dos masculinos.
+# A diferença de ~12% pode indicar maior engajamento do público feminino na simulação,
+# possivelmente porque há mais personas femininas geradas
 
 # %% [markdown]
 # ## 3. Treinamento do modelo
