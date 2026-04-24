@@ -1,50 +1,36 @@
 import warnings
 warnings.filterwarnings("ignore")
 
+import csv
 import json
 import numpy as np
 import pandas as pd
+import joblib
 from pathlib import Path
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import gradio as gr
 
 BASE = Path(__file__).parent
-DADOS = BASE / "dados"
+DADOS    = BASE / "dados"
+MODELOS  = BASE / "modelos"
 USUARIOS_JSON = BASE / "usuarios.json"
+FEEDBACK_CSV  = DADOS / "feedback.csv"
 
-df_produtos = pd.read_csv(DADOS / "produtos.csv")
-df_matriz = pd.read_csv(DADOS / "matriz_utilidade.csv", index_col="usuario_id")
-
-df_produtos["corpus"] = (
-    df_produtos["familia_olfativa"] + " " +
-    df_produtos["notas_olfativas"] + " " +
-    df_produtos["ocasiao"]
-)
-tfidf = TfidfVectorizer()
-tfidf_matrix = tfidf.fit_transform(df_produtos["corpus"])
-cos_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-
-mat = df_matriz.values.astype(float)
-mat[mat == 0] = np.nan
-user_means = np.nanmean(mat, axis=1)
-user_means = np.where(np.isnan(user_means), 3.0, user_means)
-mat_filled = np.where(np.isnan(mat), user_means[:, np.newaxis], mat)
-mat_centered = mat_filled - user_means[:, np.newaxis]
-U, sigma, Vt = np.linalg.svd(mat_centered, full_matrices=False)
-k = 15
-pred_matrix = (U[:, :k] @ np.diag(sigma[:k]) @ Vt[:k, :]) + user_means[:, np.newaxis]
-pred_matrix = np.clip(pred_matrix, 1.0, 5.0)
+# carrega modelos treinados pelo notebook — sem retreino
+df_produtos = pd.read_csv(DADOS / "produtos_processados.csv")
+vectorizer  = joblib.load(MODELOS / "tfidf_vectorizer.pkl")
+vectorized  = joblib.load(MODELOS / "tfidf_matrix.pkl")
+pred_matrix = joblib.load(MODELOS / "svd_pred_matrix.pkl")
 
 FAMILIAS = sorted(df_produtos["familia_olfativa"].unique().tolist())
 OCASIOES = sorted(df_produtos["ocasiao"].unique().tolist())
-GENEROS = ["feminino", "masculino", "unissex"]
+GENEROS  = ["feminino", "masculino", "unissex"]
 
 
 def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, top_n=5):
-    perfil = " ".join(familias_pref) + " " + ocasiao_pref
-    perfil_vec = tfidf.transform([perfil])
-    scores_tfidf = cosine_similarity(perfil_vec, tfidf_matrix).flatten()
+    perfil = " ".join(familias_pref) + " " + ocasiao_pref + " " + genero_pref
+    perfil_vec = vectorizer.transform([perfil])
+    scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
 
     mask = df_produtos["genero"].isin([genero_pref, "unissex"])
     if faixa_preco == "ate_100":
@@ -62,13 +48,18 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
     indices = df_produtos[mask].index.tolist()
     candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
     top20 = [i for i, _ in candidatos]
-    svd_scores = pred_matrix[:, top20].mean(axis=0)
+
+    # encontra os 50 usuários com perfil mais similar e usa as notas previstas deles
+    scores_perfil = scores_tfidf[top20]
+    pesos_usuarios = pred_matrix[:, top20] @ scores_perfil
+    top_usuarios = np.argsort(pesos_usuarios)[::-1][:50]
+    svd_scores = pred_matrix[top_usuarios][:, top20].mean(axis=0)
 
     resultado = []
     for rank, idx in enumerate(top20):
         tfidf_s = scores_tfidf[idx]
-        svd_s = (svd_scores[rank] - 1) / 4
-        final = 0.7 * tfidf_s + 0.3 * svd_s
+        svd_s   = (svd_scores[rank] - 1) / 4
+        final   = 0.7 * tfidf_s + 0.3 * svd_s
         resultado.append((idx, final, svd_scores[rank]))
 
     resultado.sort(key=lambda x: x[1], reverse=True)
@@ -97,27 +88,27 @@ def faixa_from_slider(valor):
     return "acima_300"
 
 
-def auth_output_payload(status_msg, msg_bem_vindo, auth_visible, perfil_visible, 
-                        nome, genero, familia, ocasiao, preco_max):
+def auth_output_payload(status_msg, msg_bem_vindo, auth_visible, perfil_visible,
+                        email, nome, genero, familia, ocasiao, preco_max):
     return (
-        status_msg, 
-        msg_bem_vindo, 
-        gr.update(visible=auth_visible), 
-        gr.update(visible=perfil_visible), 
+        status_msg,
+        msg_bem_vindo,
+        gr.update(visible=auth_visible),
+        gr.update(visible=perfil_visible),
         gr.update(visible=perfil_visible), # vitrine_auth
         gr.update(visible=auth_visible),   # vitrine_anon
         gr.update(visible=perfil_visible), # feedback_auth
         gr.update(visible=auth_visible),   # feedback_anon
-        nome, genero, familia, ocasiao, preco_max
+        email, nome, genero, familia, ocasiao, preco_max
     )
 
 
 def cadastrar(email, senha, nome, genero, familia, ocasiao, preco_max):
     if not email or not senha or not nome:
-        return auth_output_payload("⚠️ Preencha e-mail, senha e nome.", "", True, False, None, None, [], None, 200)
+        return auth_output_payload("⚠️ Preencha e-mail, senha e nome.", "", True, False, None, None, None, [], None, 200)
     usuarios = carregar_usuarios()
     if email in usuarios:
-        return auth_output_payload("⚠️ E-mail já cadastrado. Faça login.", "", True, False, None, None, [], None, 200)
+        return auth_output_payload("⚠️ E-mail já cadastrado. Faça login.", "", True, False, None, None, None, [], None, 200)
         
     usuarios[email] = {
         "senha": senha,
@@ -149,21 +140,21 @@ def cadastrar(email, senha, nome, genero, familia, ocasiao, preco_max):
         </div>
     </div>
     """
-    return auth_output_payload("", info_html, False, True, nome, genero, familia, ocasiao, preco_max)
+    return auth_output_payload("", info_html, False, True, email, nome, genero, familia, ocasiao, preco_max)
 
 
 def login(email, senha):
     if not email or not senha:
-        return auth_output_payload("⚠️ Digite e-mail e senha.", "", True, False, None, None, [], None, 200)
+        return auth_output_payload("⚠️ Digite e-mail e senha.", "", True, False, None, None, None, [], None, 200)
     usuarios = carregar_usuarios()
     if email not in usuarios:
-        return auth_output_payload("❌ E-mail não encontrado. Cadastre-se primeiro.", "", True, False, None, None, [], None, 200)
+        return auth_output_payload("❌ E-mail não encontrado. Cadastre-se primeiro.", "", True, False, None, None, None, [], None, 200)
     u = usuarios[email]
     if u.get("senha") != senha:
-        return auth_output_payload("❌ Senha incorreta.", "", True, False, None, None, [], None, 200)
-    
+        return auth_output_payload("❌ Senha incorreta.", "", True, False, None, None, None, [], None, 200)
+
     familia = u["familia"] if isinstance(u["familia"], list) else [u["familia"]]
-    
+
     info_html = f"""
     <div style="background:linear-gradient(145deg,#1c1829,#252137);border-radius:12px;padding:24px;border:1px solid rgba(201,169,110,0.3);margin:20px 0;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
         <h3 style="color:#c9a96e;margin-top:0;font-size:20px;">✅ Bem-vindo(a) de volta, {u['nome']}!</h3>
@@ -187,11 +178,48 @@ def login(email, senha):
         </div>
     </div>
     """
-    return auth_output_payload("", info_html, False, True, u["nome"], u["genero"], familia, u["ocasiao"], u["preco_max"])
+    return auth_output_payload("", info_html, False, True, email, u["nome"], u["genero"], familia, u["ocasiao"], u["preco_max"])
 
 
 def logout():
-    return auth_output_payload("", "", True, False, None, None, [], None, 200)
+    return auth_output_payload("", "", True, False, None, None, None, [], None, 200)
+
+
+def atualizar_perfil(email, genero, familia, ocasiao, preco_max):
+    if not email:
+        return "⚠️ Usuário não identificado.", gr.update(), genero, familia, ocasiao, preco_max
+    usuarios = carregar_usuarios()
+    usuarios[email]["genero"]    = genero
+    usuarios[email]["familia"]   = familia
+    usuarios[email]["ocasiao"]   = ocasiao
+    usuarios[email]["preco_max"] = preco_max
+    salvar_usuarios(usuarios)
+
+    nome = usuarios[email]["nome"]
+    info_html = f"""
+    <div style="background:linear-gradient(145deg,#1c1829,#252137);border-radius:12px;padding:24px;border:1px solid rgba(201,169,110,0.3);margin:20px 0;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <h3 style="color:#c9a96e;margin-top:0;font-size:20px;">✅ Bem-vindo(a), {nome}!</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;">
+            <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;">
+                <span style="color:#8a7f9e;font-size:11px;text-transform:uppercase;letter-spacing:1px;">🧬 Gênero</span><br>
+                <span style="color:#e8d5b7;font-weight:bold;">{genero}</span>
+            </div>
+            <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;">
+                <span style="color:#8a7f9e;font-size:11px;text-transform:uppercase;letter-spacing:1px;">📍 Ocasião</span><br>
+                <span style="color:#e8d5b7;font-weight:bold;">{ocasiao}</span>
+            </div>
+            <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;">
+                <span style="color:#8a7f9e;font-size:11px;text-transform:uppercase;letter-spacing:1px;">💰 Preço Máx</span><br>
+                <span style="color:#e8d5b7;font-weight:bold;">R$ {preco_max:.2f}</span>
+            </div>
+            <div style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;">
+                <span style="color:#8a7f9e;font-size:11px;text-transform:uppercase;letter-spacing:1px;">🌸 Famílias Favoritas</span><br>
+                <span style="color:#e8d5b7;font-weight:bold;">{', '.join(familia)}</span>
+            </div>
+        </div>
+    </div>
+    """
+    return "✅ Perfil atualizado com sucesso!", info_html, genero, familia, ocasiao, preco_max
 
 
 import base64
@@ -324,14 +352,25 @@ def preparar_feedback(pedidos):
 def salvar_feedback(pedidos, s1, s2, s3, s4, s5, t1, t2, t3, t4, t5):
     if not pedidos:
         return "⚠️ Nenhum pedido para avaliar."
-    notas = [s1, s2, s3, s4, s5]
+    notas  = [s1, s2, s3, s4, s5]
     textos = [t1, t2, t3, t4, t5]
+
+    # persiste o feedback em feedback.csv para análise futura
+    novo_arquivo = not FEEDBACK_CSV.exists()
+    with open(FEEDBACK_CSV, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if novo_arquivo:
+            writer.writerow(["perfume", "nota", "review"])
+        for i in range(len(pedidos)):
+            texto = textos[i].strip() if textos[i].strip() else ""
+            writer.writerow([pedidos[i], int(notas[i]), texto])
+
     linhas = []
     for i in range(len(pedidos)):
         stars = '★' * int(notas[i]) + '☆' * (5 - int(notas[i]))
         texto = textos[i].strip() if textos[i].strip() else "Sem comentários."
         linhas.append(f"  • **{pedidos[i]}**: {stars}\n    *Review:* \"{texto}\"")
-    return "✅ **Feedback e Review registrados com sucesso!** Obrigado pela sua avaliação.\n\n" + "\n\n".join(linhas)
+    return "✅ **Feedback registrado com sucesso!** Obrigado pela sua avaliação.\n\n" + "\n\n".join(linhas)
 
 
 CUSTOM_CSS = """
@@ -429,10 +468,11 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
 
     # Global states to pass around
     pedidos_state = gr.State([])
-    nome_st = gr.State(None)
-    genero_st = gr.State(None)
-    familias_st = gr.State([])
-    ocasiao_st = gr.State(None)
+    email_st     = gr.State(None)
+    nome_st      = gr.State(None)
+    genero_st    = gr.State(None)
+    familias_st  = gr.State([])
+    ocasiao_st   = gr.State(None)
     preco_max_st = gr.State(200)
 
     with gr.Tabs():
@@ -472,6 +512,15 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
             with gr.Column(visible=False) as box_perfil:
                 msg_bem_vindo = gr.HTML()
                 gr.HTML("<p style='text-align:center;color:#8a7f9e;font-size:14px;margin:20px 0;'>Navegue para a aba <b>🛍️ Minha Vitrine</b> para gerar suas recomendações!</p>")
+
+                with gr.Accordion("✏️ Editar Preferências", open=False):
+                    edit_genero   = gr.Radio(GENEROS, label="🧬 Gênero dos perfumes", value="feminino")
+                    edit_familias = gr.CheckboxGroup(FAMILIAS, label="🌸 Famílias olfativas preferidas")
+                    edit_ocasiao  = gr.Radio(OCASIOES, label="📍 Ocasião de uso")
+                    edit_preco    = gr.Slider(50, 350, value=200, step=10, label="💰 Preço máximo (R$)")
+                    btn_salvar_perfil = gr.Button("💾 Salvar Preferências", variant="primary")
+                    msg_editar_perfil = gr.Markdown("")
+
                 btn_logout = gr.Button("🚪 Sair / Trocar de Perfil", variant="secondary")
 
         with gr.Tab("🛍️ Minha Vitrine"):
@@ -544,23 +593,29 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
 
     # Wiring logic
     auth_outputs = [
-        login_msg, msg_bem_vindo, 
-        box_auth, box_perfil, 
+        login_msg, msg_bem_vindo,
+        box_auth, box_perfil,
         box_vitrine_auth, box_vitrine_anon,
         box_feedback_auth, box_feedback_anon,
-        nome_st, genero_st, familias_st, ocasiao_st, preco_max_st
+        email_st, nome_st, genero_st, familias_st, ocasiao_st, preco_max_st
     ]
     cad_outputs = [
-        cad_msg, msg_bem_vindo, 
-        box_auth, box_perfil, 
+        cad_msg, msg_bem_vindo,
+        box_auth, box_perfil,
         box_vitrine_auth, box_vitrine_anon,
         box_feedback_auth, box_feedback_anon,
-        nome_st, genero_st, familias_st, ocasiao_st, preco_max_st
+        email_st, nome_st, genero_st, familias_st, ocasiao_st, preco_max_st
     ]
 
     btn_login.click(login, [login_email, login_senha], auth_outputs)
     btn_cadastrar.click(cadastrar, [cad_email, cad_senha, cad_nome, cad_genero, cad_familias, cad_ocasiao, cad_preco_max], cad_outputs)
     btn_logout.click(logout, [], auth_outputs)
+
+    btn_salvar_perfil.click(
+        atualizar_perfil,
+        [email_st, edit_genero, edit_familias, edit_ocasiao, edit_preco],
+        [msg_editar_perfil, msg_bem_vindo, genero_st, familias_st, ocasiao_st, preco_max_st]
+    )
 
     btn_vitrine.click(
         gerar_vitrine, 
