@@ -1,6 +1,3 @@
 dados/
-imagens/*
-!imagens/.gitkeep
-graficos/
 __pycache__/
 *.pyc
