@@ -169,8 +169,8 @@ PERFUMES = [
     # ---- Granado / Phebo / Mahogany -----------------------------------------
     ("Granado Pink", "Granado", "feminino", "floral",
      "rosa, peonia, violeta, almiscar, madeira", "diurno-casual"),
-    ("Phebo Agua de Folhas de Figo", "Phebo", "unissex", "aromatico verde",
-     "folha de figo, bergamota, notas aquosas, vetiver, patchouli", "diurno-casual"),
+    ("Bem Me Quero", "Phebo", "feminino", "floral verde",
+     "folhas verdes, limao, peonia, jasmim, ylang ylang, sandalo, almiscar, ambar, cedro", "noturno-casual"),
     ("Mahogany Flor de Cerejeira", "Mahogany", "feminino", "floral",
      "flor de cerejeira, rosa, violeta, pessego, almiscar", "diurno-casual"),
     ("Mahogany Eau Intense", "Mahogany", "masculino", "amadeirado",
@@ -232,7 +232,7 @@ PRECOS = [
     139.90,  # 45 Kaiak Pulso Masculino    — natura.com.br
     139.90,  # 46 Kaiak O2 Masculino       — natura.com.br
      69.90,  # 47 Granado Pink             — granado.com.br
-     99.90,  # 48 Phebo Agua Folhas de Figo— phebo.com.br (50ml)
+    290.00,  # 48 Bem Me Quero             — phebo.com.br
     159.90,  # 49 Mahogany Flor Cerejeira  — mercadolivre.com.br
     149.90,  # 50 Mahogany Eau Intense     — mahogany.com.br
 ]

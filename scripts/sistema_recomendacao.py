@@ -71,7 +71,7 @@ plt.show()
 
 # %% [markdown]
 # Boticário e Natura dominam aparecem mais vezes no catálogo.
-# Avon contribui com 7 perfumes, Eudora com 4, e Mahogany, Granado e Phebo com 1–2 cada.
+# Avon contribui com 7 perfumes, Eudora com 4, e Mahogany, Granado e Phebo com 2 cada.
 
 # %%
 # agrupando perfume por familia olfativa para plotar
@@ -108,7 +108,7 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# O catálogo é equilibrado entre feminino e masculino, mas tem apenas 1 perfume unissex.
+# O catálogo é equilibrado entre feminino e masculino, com 26 femininos e 24 masculinos.
 
 # %%
 
@@ -202,17 +202,11 @@ plt.show()
 
 # %%
 
-phebo = df_produtos[df_produtos['nome'] == 'Phebo Agua de Folhas de Figo']
-phebo
-
-# %%
-
 print('Média de avaliações por gênero')
 print(avaliacoes_por_perfume.groupby('genero')['total_avaliacoes'].mean().round(1))
 # %%[markdown]
 
-#O perfume com mais avaliações é o Phebo Água de Folhas de Figo, único unissex do catálogo.
-#Por não ter barreira de gênero, todos os 500 usuários simulados têm chance de avaliá-lo,
+# A média de avaliações por gênero mostra se há diferença de engajamento entre perfumes femininos e masculinos.
 
 # %% [markdown]
 # ## 3. Treinamento do modelo
@@ -431,7 +425,7 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
     scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
 
     # filtro de gênero
-    mask = df_produtos['genero'].isin([clean_text(genero_pref), 'unissex'])
+    mask = df_produtos['genero'] == clean_text(genero_pref)
 
     # filtro de preço
     if faixa_preco == 'ate_100':
@@ -445,7 +439,7 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
 
     # se nenhum perfume passar no filtro de preço, ignora o filtro
     if mask.sum() == 0:
-        mask = df_produtos['genero'].isin([clean_text(genero_pref), 'unissex'])
+        mask = df_produtos['genero'] == clean_text(genero_pref)
 
     # top-20 candidatos pelo TF-IDF
     indices = df_produtos[mask].index.tolist()
