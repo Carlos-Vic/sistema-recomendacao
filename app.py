@@ -24,7 +24,7 @@ pred_matrix = joblib.load(MODELOS / "svd_pred_matrix.pkl")
 
 FAMILIAS = sorted(df_produtos["familia_olfativa"].unique().tolist())
 OCASIOES = sorted(df_produtos["ocasiao"].unique().tolist())
-GENEROS  = ["feminino", "masculino", "unissex"]
+GENEROS  = ["feminino", "masculino"]
 
 
 def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, top_n=5):
@@ -32,21 +32,33 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
     perfil_vec = vectorizer.transform([perfil])
     scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
 
-    mask = df_produtos["genero"].isin([genero_pref, "unissex"])
-    if faixa_preco == "ate_100":
-        mask &= df_produtos["preco"] <= 100
-    elif faixa_preco == "100_200":
-        mask &= (df_produtos["preco"] > 100) & (df_produtos["preco"] <= 200)
-    elif faixa_preco == "200_300":
-        mask &= (df_produtos["preco"] > 200) & (df_produtos["preco"] <= 300)
-    else:
-        mask &= df_produtos["preco"] > 300
+    def aplicar_filtro_preco(m):
+        if faixa_preco == "ate_100":
+            return m & (df_produtos["preco"] <= 100)
+        elif faixa_preco == "100_200":
+            return m & (df_produtos["preco"] > 100) & (df_produtos["preco"] <= 200)
+        elif faixa_preco == "200_300":
+            return m & (df_produtos["preco"] > 200) & (df_produtos["preco"] <= 300)
+        else:
+            return m & (df_produtos["preco"] > 300)
 
+    mask = aplicar_filtro_preco(df_produtos["genero"] == genero_pref)
     if mask.sum() == 0:
-        mask = df_produtos["genero"].isin([genero_pref, "unissex"])
+        mask = df_produtos["genero"] == genero_pref
 
     indices = df_produtos[mask].index.tolist()
     candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
+
+    # se o melhor match for abaixo de 0.3, expande para todos os gêneros
+    aviso_expansao = False
+    if candidatos and candidatos[0][1] < 0.3:
+        aviso_expansao = True
+        mask_expandida = aplicar_filtro_preco(pd.Series([True] * len(df_produtos), index=df_produtos.index))
+        if mask_expandida.sum() == 0:
+            mask_expandida = pd.Series([True] * len(df_produtos), index=df_produtos.index)
+        indices = df_produtos[mask_expandida].index.tolist()
+        candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
+
     top20 = [i for i, _ in candidatos]
 
     # encontra os 50 usuários com perfil mais similar e usa as notas previstas deles
@@ -63,13 +75,15 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, to
         resultado.append((idx, final, svd_scores[rank]))
 
     resultado.sort(key=lambda x: x[1], reverse=True)
-    return resultado[:top_n]
+    return resultado[:top_n], aviso_expansao
 
 
 def carregar_usuarios():
     if USUARIOS_JSON.exists():
         with open(USUARIOS_JSON, "r", encoding="utf-8") as f:
-            return json.load(f)
+            conteudo = f.read().strip()
+            if conteudo:
+                return json.loads(conteudo)
     return {}
 
 
@@ -234,7 +248,7 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
         return [gr.update(value="<p style='text-align:center;color:#888;padding:60px;'>Seu perfil não tem famílias olfativas cadastradas.</p>")] + out_cols + out_htmls + out_checks + out_nomes + [gr.update(visible=False)]
 
     faixa = faixa_from_slider(preco_max)
-    tops = recomendar_hibrido(familias, ocasiao, genero, faixa)
+    tops, aviso_expansao = recomendar_hibrido(familias, ocasiao, genero, faixa)
 
     for i in range(5):
         if i < len(tops):
@@ -298,12 +312,23 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
             out_checks[i] = gr.update(value=False)
             out_nomes[i] = str(r["nome"])
 
+    aviso_html = ""
+    if aviso_expansao:
+        aviso_html = """
+        <div style="background:rgba(201,169,110,0.1);border:1px solid rgba(201,169,110,0.3);
+                    border-radius:8px;padding:10px 16px;margin-bottom:16px;text-align:center;">
+            <span style="color:#c9a96e;font-size:13px;">⚠️ Poucos perfumes do gênero selecionado combinam com essa família olfativa.
+            As recomendações foram expandidas para todos os gêneros.</span>
+        </div>
+        """
+
     titulo = f"""
     <div style="text-align:center;margin-bottom:24px;">
         <h2 style="color:#e8d5b7;margin:0;font-size:24px;">✦ Recomendações para {nome}</h2>
         <p style="color:#8a7f9e;font-size:13px;margin-top:4px;">
             {', '.join(familias)} · {ocasiao} · até R${preco_max:.0f}</p>
     </div>
+    {aviso_html}
     """
     visivel = len(tops) > 0
     btn_pedir_update = gr.update(visible=visivel)
