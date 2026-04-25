@@ -1,0 +1,402 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf-8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[portuguese]{babel}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+\setstretch{1.5}
+
+% Configuração de cores para código
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codepurple},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+\title{\textbf{Sistema de Recomendação de Perfumes Nacionais} \\ 
+       \large Projeto 1 --- Introdução à Inteligência Artificial}
+\author{}
+\date{Universidade de Brasília \\ Departamento de Ciência da Computação \\ Turma 01, 2026/1 \\ Prof. Díbio}
+
+\pagestyle{fancy}
+\fancyhf{}
+\cfoot{\thepage}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este projeto implementa um sistema híbrido de recomendação para uma loja virtual de perfumes nacionais, combinando as técnicas de \textbf{TF-IDF} (filtragem por conteúdo) e \textbf{SVD} (filtragem colaborativa). O sistema recomenda produtos personalizados para novos usuários a partir de suas preferências declaradas, refinadas pela matriz de utilidade de 500 usuários similares. A abordagem híbrida resolve o problema do ``cold-start'', oferecendo recomendações relevantes mesmo para usuários sem histórico de compras prévias.
+\end{abstract}
+
+\section{Introdução}
+
+O objetivo deste projeto é desenvolver um sistema inteligente de recomendação que combine técnicas de filtragem por conteúdo e filtragem colaborativa. A motivação é prática: melhorar a experiência do usuário em uma loja virtual de perfumes nacionais, oferecendo recomendações personalizadas e relevantes.
+
+A abordagem híbrida foi escolhida para mitigar os problemas conhecidos:
+\begin{itemize}
+    \item \textbf{Cold-start com TF-IDF puro:} novos usuários recebem recomendações genéricas
+    \item \textbf{Cold-start com SVD puro:} sem dados de interação, não há como fazer predições
+    \item \textbf{Solução híbrida:} TF-IDF gera candidatos relevantes, SVD reordena com insights colaborativos
+\end{itemize}
+
+\section{Definição do Problema e Dados}
+
+\subsection{Catálogo de Produtos}
+
+O projeto utiliza \textbf{50 perfumes nacionais} provenientes de 6 marcas principais:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|}
+\toprule
+\textbf{Marca} & \textbf{Quantidade} \\
+\midrule
+O Boticário & 15 \\
+Natura & 15 \\
+Eudora & 4 \\
+Avon & 7 \\
+Mahogany, Granado, Phebo & 9 \\
+\bottomrule
+\end{tabular}
+\caption{Distribuição de perfumes por marca}
+\label{tab:marcas}
+\end{table}
+
+\subsubsection{Características dos Produtos}
+
+Cada perfume possui \textbf{3 características principais} utilizadas pelo modelo de recomendação:
+
+\begin{enumerate}
+    \item \textbf{Família Olfativa} (23 tipos): Exemplos include floral, amadeirado, citríco, oriental, gourmand, aquático, aromatico, entre outros.
+    
+    \item \textbf{Ocasião de Uso}: Contexto de uso categorizando-se em diurno/noturno, formal/casual, verão/inverno. Exemplos: ``diurno-casual'', ``noturno-formal'', ``diurno-verao''.
+    
+    \item \textbf{Gênero}: Categoria de público (masculino, feminino, ou implicitamente unissex).
+\end{enumerate}
+
+Adicionalmente, cada produto inclui: preço (R\$ 69,90 a R\$ 319,90), notas olfativas (pirâmide olfativa em 5-7 componentes) e marca.
+
+\subsection{Matriz de Utilidade}
+
+A matriz de utilidade foi construída com \textbf{500 usuários} e \textbf{50 perfumes}, totalizando 25.000 células potenciais.
+
+\subsubsection{Características}
+
+\begin{itemize}
+    \item \textbf{Avaliações registradas:} 5.905 (23,6\% de densidade)
+    \item \textbf{Média por usuário:} 11,8 avaliações
+    \item \textbf{Escala de notas:} 1 a 5 (inteiros)
+    \item \textbf{Células vazias (0):} 19.095 (usuários que não avaliaram)
+\end{itemize}
+
+\subsubsection{Metodologia de Geração}
+
+A matriz foi gerada sinteticamente mantendo critérios realistas:
+
+\paragraph{Personas de Usuários:}
+Cada usuário recebe uma ``persona'' com preferências aleatórias:
+\begin{itemize}
+    \item 1-2 famílias olfativas favoritas
+    \item Uma ocasião preferida
+    \item Conjunto de gêneros aceitáveis (45\% masc, 45\% fem, 10\% ambos)
+\end{itemize}
+
+\paragraph{Modelo de Notas:}
+A nota de um perfume para um usuário é calculada como:
+\begin{equation}
+\text{nota} = 2.5 + \Delta_{\text{fam}} + \Delta_{\text{ocas}} + \Delta_{\text{gênero}} + \epsilon
+\end{equation}
+
+onde:
+\begin{itemize}
+    \item $\Delta_{\text{fam}} \in [0, 1.6]$ se há sobreposição de tokens na família olfativa
+    \item $\Delta_{\text{ocas}} \in [0, 0.6]$ se há sobreposição na ocasião
+    \item $\Delta_{\text{gênero}} = -2.2$ se gênero é incompatível
+    \item $\epsilon \sim \mathcal{N}(0, 0.45)$ é ruído gaussiano
+    \item nota final: $\text{clamp}(\text{nota}, 1, 5)$
+\end{itemize}
+
+\paragraph{Probabilidade de Avaliação:}
+\begin{itemize}
+    \item Gênero incompatível: 4\%
+    \item Família favorita: 65\%
+    \item Outros produtos: 22\%
+\end{itemize}
+
+\paragraph{Usuários Silenciosos:}
+Aproximadamente 12\% dos usuários nunca deixam avaliações, modelando comportamento realista.
+
+\section{Metodologia de Recomendação}
+
+\subsection{Fase 1: TF-IDF (Filtragem por Conteúdo)}
+
+O algoritmo TF-IDF identifica candidatos iniciais baseado no perfil do novo usuário.
+
+\subsubsection{Processo}
+
+\begin{enumerate}
+    \item Construir vetor de características do usuário: $\text{perfil} = \text{família} + \text{ ocasião} + \text{ gênero}$
+    
+    \item Vectorizar usando TF-IDF pré-treinado:
+    \begin{equation}
+    \vec{v}_{\text{perfil}} = \text{TfidfVectorizer.transform}(\text{perfil})
+    \end{equation}
+    
+    \item Calcular similaridade de cosseno com cada perfume:
+    \begin{equation}
+    \text{sim}(i) = \frac{\vec{v}_{\text{perfil}} \cdot \vec{v}_{i}}{|\vec{v}_{\text{perfil}}| \cdot |\vec{v}_{i}|}
+    \end{equation}
+    
+    \item Aplicar filtros:
+    \begin{itemize}
+        \item Gênero deve corresponder (ou expandir se nenhum resultado)
+        \item Preço $\leq$ limite do usuário
+    \end{itemize}
+    
+    \item Retornar top-20 candidatos ordenados por $\text{sim}(i)$
+\end{enumerate}
+
+\subsubsection{Características}
+
+\begin{itemize}
+    \item \textbf{Velocidade:} O(n) em número de perfumes
+    \item \textbf{Funciona com novos usuários:} Não requer histórico
+    \item \textbf{Determinístico:} Mesmo perfil $\Rightarrow$ mesmas recomendações
+    \item \textbf{Transparente:} Fácil explicar ``por que'' um perfume foi recomendado
+\end{itemize}
+
+\subsection{Fase 2: SVD (Filtragem Colaborativa)}
+
+O algoritmo SVD reordena os top-20 candidatos usando matrix factorization e insights de usuários similares.
+
+\subsubsection{Processo}
+
+\begin{enumerate}
+    \item Encontrar os 50 usuários mais similares ao novo usuário usando scores TF-IDF
+    
+    \item Extrair predições do SVD pré-treinado para esses 50 usuários:
+    \begin{equation}
+    \hat{R}_{50 \times 20} = \text{pred\_matrix}[\text{top\_50\_usuarios}, \text{top\_20\_perfumes}]
+    \end{equation}
+    
+    \item Calcular nota média prevista por perfume:
+    \begin{equation}
+    \text{svd\_score}(j) = \frac{1}{50} \sum_{i=1}^{50} \hat{R}_{ij}
+    \end{equation}
+    
+    \item Normalizar para [0, 1]:
+    \begin{equation}
+    \text{svd\_norm}(j) = \frac{\text{svd\_score}(j) - 1}{4}
+    \end{equation}
+    
+    \item Combinar com TF-IDF (vide seção 3.3)
+\end{enumerate}
+
+\subsubsection{Características}
+
+\begin{itemize}
+    \item Captura correlações ocultas entre produtos
+    \item Beneficia-se de padrões coletivos
+    \item Descoberta de serendipidade (usuário pode gostar de perfume não óbvio)
+\end{itemize}
+
+\subsection{Combinação Híbrida}
+
+O score final combina ambas as abordagens:
+
+\begin{equation}
+\text{score\_final}(j) = 0.7 \times \text{tfidf}(j) + 0.3 \times \text{svd\_norm}(j)
+\end{equation}
+
+\textbf{Justificativa dos pesos:}
+\begin{itemize}
+    \item 70\% TF-IDF: Mantém relevância de conteúdo como base principal
+    \item 30\% SVD: Incorpora insights colaborativos de forma complementar
+    \item Evita overfitting a usuários similares (podem ter preferências atípicas)
+\end{itemize}
+
+O sistema retorna os \textbf{top-5} perfumes ordenados por score\_final.
+
+\section{Implementação}
+
+\subsection{Estrutura do Projeto}
+
+\begin{lstlisting}[language=bash]
+sistema-recomendacao/
+├── app.py                      # Interface Gradio (UI web)
+├── scripts/
+│   ├── gerar_dados.py          # Gera catálogo + matriz (seed=42)
+│   └── sistema_recomendacao.py # Código modularizado do notebook
+├── notebook/
+│   └── sistema_recomendacao.ipynb
+├── modelos/                    # Pré-treinados
+│   ├── tfidf_vectorizer.pkl
+│   ├── tfidf_matrix.pkl
+│   └── svd_pred_matrix.pkl
+└── dados/
+    ├── produtos.csv
+    ├── produtos_processados.csv
+    ├── matriz_utilidade.csv
+    └── feedback.csv
+\end{lstlisting}
+
+\subsection{Dependências}
+
+\begin{itemize}
+    \item \textbf{pandas}: manipulação de dados
+    \item \textbf{scikit-learn}: TF-IDF, SVD, similaridade de cosseno
+    \item \textbf{scipy}: operações numéricas
+    \item \textbf{seaborn, matplotlib}: visualizações (notebook)
+    \item \textbf{gradio}: interface web
+    \item \textbf{joblib}: serialização de modelos
+\end{itemize}
+
+\subsection{Interface Gradio}
+
+A interface web oferece 4 abas funcionais:
+
+\paragraph{1. Portal do Cliente}
+\begin{itemize}
+    \item Cadastro: email, senha, nome, preferências
+    \item Login/Logout
+    \item Editar preferências (accordion)
+\end{itemize}
+
+\paragraph{2. Minha Vitrine}
+\begin{itemize}
+    \item Botão ``Gerar Recomendações''
+    \item Exibe top-5 com imagem, preço, família olfativa
+    \item Adiciona ao carrinho e finaliza pedidos
+\end{itemize}
+
+\paragraph{3. Feedback}
+\begin{itemize}
+    \item Carrega pedidos realizados
+    \item Usuário avalia cada perfume (1-5)
+    \item Salva em \texttt{dados/feedback.csv} (persistido)
+\end{itemize}
+
+\paragraph{4. Portal Anônimo}
+Demo sem necessidade de cadastro para explorar o sistema.
+
+\section{Resultados}
+
+\subsection{Matriz de Utilidade}
+
+\begin{itemize}
+    \item 500 usuários, 50 perfumes, 25.000 células
+    \item 5.905 avaliações (23,6\% de densidade)
+    \item 11,8 avaliações por usuário (em média)
+    \item Densidade adequada para SVD (recomenda-se > 10\%)
+\end{itemize}
+
+\subsection{Desempenho Computacional}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|r|}
+\toprule
+\textbf{Tarefa} & \textbf{Tempo} \\
+\midrule
+Geração de dados & < 1s \\
+Treinamento TF-IDF & < 1s \\
+Treinamento SVD & < 2s \\
+Recomendação por usuário & < 100ms \\
+\bottomrule
+\end{tabular}
+\caption{Tempos de execução}
+\label{tab:performance}
+\end{table}
+
+\subsection{Qualidade das Recomendações}
+
+O sistema prioriza:
+\begin{enumerate}
+    \item Relevância de conteúdo (família olfativa, ocasião, gênero)
+    \item Preferências colaborativas (usuários similares)
+    \item Filtros práticos (gênero, faixa de preço)
+\end{enumerate}
+
+\textbf{Exemplo de fluxo:}
+\begin{itemize}
+    \item \textit{Entrada:} Nova usuária, feminino, gosta de florais, orçamento R\$ 150
+    \item \textit{TF-IDF (top-20):} Lily Essence, Floratta Rosas, Egeo Dolce, \ldots
+    \item \textit{SVD reordena:} Baseado em padrões de mulheres com preferência floral
+    \item \textit{Top-5 final:} Perfumes florais bem-avaliados por personas similares
+\end{itemize}
+
+\subsection{Limitações e Tratamento}
+
+\paragraph{Cold-start para novos usuários:}
+Sem histórico, SVD retorna predições neutras. Nesse caso, TF-IDF (70\%) domina, garantindo recomendações minimamente relevantes. À medida que o usuário interage, seria possível retreinar SVD periodicamente.
+
+\paragraph{Matriz esparsa:}
+23,6\% de densidade é adequado para SVD, mas matriz mais densa melhoraria predições.
+
+\section{Conclusão}
+
+O projeto implementa com sucesso um sistema de recomendação híbrido que atende todos os requisitos:
+
+\begin{itemize}
+    \item[$\checkmark$] 50 produtos com 3 características + avaliação 1-5
+    \item[$\checkmark$] 500 usuários com matriz de utilidade reproduzível (seed=42)
+    \item[$\checkmark$] Modelo híbrido TF-IDF + SVD bem documentado
+    \item[$\checkmark$] Interface web funcional (Gradio)
+    \item[$\checkmark$] Notebook Jupyter com EDA e treinamento
+    \item[$\checkmark$] Código modularizado e reutilizável
+\end{itemize}
+
+A abordagem híbrida oferece um balanço entre precisão de conteúdo (TF-IDF) e descoberta de padrões colaborativos (SVD), resultando em recomendações relevantes e explicáveis mesmo para usuários sem histórico.
+
+\subsection{Extensões Futuras}
+
+\begin{enumerate}
+    \item Incorporar feedback do usuário ao retreinar SVD periodicamente
+    \item Usar deep learning (autoencoders, embeddings) para representações contínuas
+    \item A/B testing de pesos (variar 0.7 e 0.3)
+    \item Análise de serendipidade e cobertura
+    \item Recomendações personalizadas por contexto (sazonalidade, clima)
+\end{enumerate}
+
+\section*{Referências}
+
+\begin{itemize}
+    \item Ricci, F., Rokach, L., \& Shapira, B. (Eds.). (2015). \textit{Recommender Systems Handbook}. Springer.
+    \item Lops, P., De Gemmis, M., \& Semeraro, G. (2011). Content-based recommender systems: State of the art and trends. In \textit{Recommender systems handbook} (pp. 73-105). Springer.
+    \item Koren, Y., Bell, R., \& Volinsky, C. (2009). Matrix factorization techniques for recommender systems. \textit{IEEE computer}, 42(8), 30-37.
+\end{itemize}
+
+\end{document}
