@@ -27,20 +27,13 @@ OCASIOES = sorted(df_produtos["ocasiao"].unique().tolist())
 GENEROS  = ["feminino", "masculino"]
 
 
-def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, faixa_preco, top_n=5):
+def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, preco_max, top_n=5):
     perfil = " ".join(familias_pref) + " " + ocasiao_pref + " " + genero_pref
     perfil_vec = vectorizer.transform([perfil])
     scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
 
     def aplicar_filtro_preco(m):
-        if faixa_preco == "ate_100":
-            return m & (df_produtos["preco"] <= 100)
-        elif faixa_preco == "100_200":
-            return m & (df_produtos["preco"] > 100) & (df_produtos["preco"] <= 200)
-        elif faixa_preco == "200_300":
-            return m & (df_produtos["preco"] > 200) & (df_produtos["preco"] <= 300)
-        else:
-            return m & (df_produtos["preco"] > 300)
+        return m & (df_produtos["preco"] <= preco_max)
 
     mask = aplicar_filtro_preco(df_produtos["genero"] == genero_pref)
     if mask.sum() == 0:
@@ -247,8 +240,7 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
     if not familias:
         return [gr.update(value="<p style='text-align:center;color:#888;padding:60px;'>Seu perfil não tem famílias olfativas cadastradas.</p>")] + out_cols + out_htmls + out_checks + out_nomes + [gr.update(visible=False)]
 
-    faixa = faixa_from_slider(preco_max)
-    tops, aviso_expansao = recomendar_hibrido(familias, ocasiao, genero, faixa)
+    tops, aviso_expansao = recomendar_hibrido(familias, ocasiao, genero, preco_max)
 
     for i in range(5):
         if i < len(tops):
