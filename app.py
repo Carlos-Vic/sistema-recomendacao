@@ -6,6 +6,7 @@ import json
 import numpy as np
 import pandas as pd
 import joblib
+import base64
 from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 import gradio as gr
@@ -27,30 +28,75 @@ OCASIOES = sorted(df_produtos["ocasiao"].unique().tolist())
 GENEROS  = ["feminino", "masculino"]
 
 
+def obter_top5_mockados(genero_pref):
+    """
+    Retorna os 5 perfumes 'mais vendidos' mockados para cada gênero.
+    Estes são perfumes bem-avaliados e populares do catálogo.
+    """
+    # Mapeamento de top-5 mockados por gênero
+    top5_por_genero = {
+        "feminino": [
+            (18, 4.8, 4.8),   # Kaiak Feminino - citrico floral, diurno verão
+            (2, 4.6, 4.6),    # Lily Essence - floral, noturno formal
+            (5, 4.7, 4.7),    # Coffee Woman Seduction - gourmand
+            (16, 4.5, 4.5),   # Essencial Exclusivo Feminino - floral amadeirado
+            (6, 4.6, 4.6),    # Floratta Rosas - floral clássico
+        ],
+        "masculino": [
+            (10, 4.7, 4.7),   # Quasar - amadeirado aromatico, diurno
+            (0, 4.8, 4.8),    # Malbec Tradicional - amadeirado, noturno
+            (4, 4.6, 4.6),    # Coffee Man Duo - amadeirado, diurno
+            (17, 4.7, 4.7),   # Kaiak Masculino - aromatico, diurno
+            (15, 4.5, 4.5),   # Essencial Masculino - amadeirado, noturno
+        ]
+    }
+    return top5_por_genero.get(genero_pref, top5_por_genero["feminino"])
+
+
+def validar_inputs(familias_pref, ocasiao_pref, genero_pref, preco_max):
+    """
+    Valida e normaliza os inputs do usuário.
+    Fornece valores padrão se campos estiverem None ou vazios.
+    """
+    # Validar e normalizar familias_pref
+    if not familias_pref:
+        familias_pref = ["floral"]  # Padrão
+    
+    # Validar e normalizar ocasiao_pref
+    if not ocasiao_pref or ocasiao_pref == "null":
+        ocasiao_pref = "diurno casual"  # Padrão (com espaço)
+    
+    # Validar e normalizar genero_pref
+    if not genero_pref or genero_pref not in ["feminino", "masculino"]:
+        genero_pref = "feminino"  # Padrão
+    
+    # Validar preco_max
+    if preco_max is None or preco_max <= 0:
+        preco_max = 200  # Padrão
+    
+    return familias_pref, ocasiao_pref, genero_pref, preco_max
+
+
 def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, preco_max, top_n=5):
+    # Validar inputs
+    familias_pref, ocasiao_pref, genero_pref, preco_max = validar_inputs(
+        familias_pref, ocasiao_pref, genero_pref, preco_max
+    )
+    
     perfil = " ".join(familias_pref) + " " + ocasiao_pref + " " + genero_pref
     perfil_vec = vectorizer.transform([perfil])
     scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
 
-    def aplicar_filtro_preco(m):
-        return m & (df_produtos["preco"] <= preco_max)
-
-    mask = aplicar_filtro_preco(df_produtos["genero"] == genero_pref)
-    if mask.sum() == 0:
-        mask = df_produtos["genero"] == genero_pref
+    # Nível 0: Respeita SEMPRE o filtro de preço - não remove restrições
+    mask = (df_produtos["genero"] == genero_pref) & (df_produtos["preco"] <= preco_max)
 
     indices = df_produtos[mask].index.tolist()
     candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
 
-    # se o melhor match for abaixo de 0.3, expande para todos os gêneros
-    aviso_expansao = False
-    if candidatos and candidatos[0][1] < 0.3:
-        aviso_expansao = True
-        mask_expandida = aplicar_filtro_preco(pd.Series([True] * len(df_produtos), index=df_produtos.index))
-        if mask_expandida.sum() == 0:
-            mask_expandida = pd.Series([True] * len(df_produtos), index=df_produtos.index)
-        indices = df_produtos[mask_expandida].index.tolist()
-        candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
+    # Se não houver nenhum candidato (ex: preço muito baixo), retorna vazio
+    # O fallback cuidará de oferecer alternativas
+    if not candidatos:
+        return [], False
 
     top20 = [i for i, _ in candidatos]
 
@@ -68,7 +114,129 @@ def recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, preco_max, top_
         resultado.append((idx, final, svd_scores[rank]))
 
     resultado.sort(key=lambda x: x[1], reverse=True)
-    return resultado[:top_n], aviso_expansao
+    return resultado[:top_n], False
+
+
+def recomendar_com_fallback(familias_pref, ocasiao_pref, genero_pref, preco_max, top_n=5):
+    """
+    Sistema de recomendação com fallback em cascata.
+    
+    Níveis de fallback:
+    0. Nível 0: TF-IDF + SVD com todas as restrições (família + ocasião + gênero + preço)
+    1. Nível 1: Remove restrição de ocasião (família + gênero + preço)
+    2. Nível 2: Remove restrição de gênero (família + ocasião + preço)
+    3. Nível 3: Retorna "Top-5 Mais Vendidos" mockados por gênero
+    
+    Retorna: (resultado, nivel_fallback, mensagem_fallback)
+    """
+    
+    # Validar inputs
+    familias_pref, ocasiao_pref, genero_pref, preco_max = validar_inputs(
+        familias_pref, ocasiao_pref, genero_pref, preco_max
+    )
+    
+    SCORE_MINIMO = 0.50
+    nivel_fallback = 0
+    mensagem = ""
+    
+    # ===== NÍVEL 0: Tentativa normal =====
+    resultado, aviso_exp = recomendar_hibrido(familias_pref, ocasiao_pref, genero_pref, preco_max, top_n)
+    
+    if resultado and resultado[0][1] >= SCORE_MINIMO:
+        # Validação adicional: verifica se há pelo menos 1 resultado com a primeira família solicitada
+        # (a mais importante, já que é a primeira na lista de preferências do usuário)
+        tem_familia_correta = False
+        familia_principal = familias_pref[0].lower()
+        
+        for idx, _, _ in resultado:
+            familia_produto = df_produtos.iloc[idx]["familia_olfativa"].lower()
+            # Verifica se a família principal está no produto
+            if familia_principal in familia_produto:
+                tem_familia_correta = True
+                break
+        
+        if tem_familia_correta:
+            return resultado, nivel_fallback, "✅ Recomendação personalizada com excelente match!"
+    
+    # ===== NÍVEL 1: Remove restrição de ocasião =====
+    nivel_fallback = 1
+    mensagem = "⚠️ Poucas opções para essa ocasião. Mostrando recomendações de outras ocasiões."
+    perfil = " ".join(familias_pref) + " " + genero_pref
+    perfil_vec = vectorizer.transform([perfil])
+    scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
+    
+    # Mantém filtro de preço neste nível
+    mask = (df_produtos["genero"] == genero_pref) & (df_produtos["preco"] <= preco_max)
+    if mask.sum() == 0:
+        # Se não houver nem no preço original, passa para próximo nível
+        pass
+    else:
+        indices = df_produtos[mask].index.tolist()
+        candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
+        
+        if candidatos:
+            top20 = [i for i, _ in candidatos]
+            scores_perfil = scores_tfidf[top20]
+            pesos_usuarios = pred_matrix[:, top20] @ scores_perfil
+            top_usuarios = np.argsort(pesos_usuarios)[::-1][:50]
+            svd_scores = pred_matrix[top_usuarios][:, top20].mean(axis=0)
+            
+            resultado = []
+            for rank, idx in enumerate(top20):
+                tfidf_s = scores_tfidf[idx]
+                svd_s = (svd_scores[rank] - 1) / 4
+                final = 0.7 * tfidf_s + 0.3 * svd_s
+                resultado.append((idx, final, svd_scores[rank]))
+            
+            resultado.sort(key=lambda x: x[1], reverse=True)
+            resultado = resultado[:top_n]
+            
+            if resultado and resultado[0][1] >= SCORE_MINIMO:
+                return resultado, nivel_fallback, mensagem
+    
+    # ===== NÍVEL 2: Remove restrição de gênero =====
+    nivel_fallback = 2
+    mensagem = "⚠️ Poucos perfumes no seu gênero. Mostrando recomendações de outras categorias."
+    
+    perfil = " ".join(familias_pref) + " " + ocasiao_pref
+    perfil_vec = vectorizer.transform([perfil])
+    scores_tfidf = cosine_similarity(perfil_vec, vectorized).flatten()
+    
+    # Mantém filtro de preço neste nível (não remove gênero ainda)
+    mask = df_produtos["preco"] <= preco_max
+    if mask.sum() == 0:
+        # Se não houver nem no preço original, passa para próximo nível
+        pass
+    else:
+        indices = df_produtos[mask].index.tolist()
+        candidatos = sorted([(i, scores_tfidf[i]) for i in indices], key=lambda x: x[1], reverse=True)[:20]
+        
+        if candidatos:
+            top20 = [i for i, _ in candidatos]
+            scores_perfil = scores_tfidf[top20]
+            pesos_usuarios = pred_matrix[:, top20] @ scores_perfil
+            top_usuarios = np.argsort(pesos_usuarios)[::-1][:50]
+            svd_scores = pred_matrix[top_usuarios][:, top20].mean(axis=0)
+            
+            resultado = []
+            for rank, idx in enumerate(top20):
+                tfidf_s = scores_tfidf[idx]
+                svd_s = (svd_scores[rank] - 1) / 4
+                final = 0.7 * tfidf_s + 0.3 * svd_s
+                resultado.append((idx, final, svd_scores[rank]))
+            
+            resultado.sort(key=lambda x: x[1], reverse=True)
+            resultado = resultado[:top_n]
+            
+            if resultado and resultado[0][1] >= SCORE_MINIMO:
+                return resultado, nivel_fallback, mensagem
+    
+    # ===== NÍVEL 3: Top-5 Mais Vendidos (Mockados) =====
+    nivel_fallback = 3
+    mensagem = "📌 Mostrando os 5 perfumes mais vendidos da comunidade!"
+    resultado = obter_top5_mockados(genero_pref)[:top_n]
+    
+    return resultado, nivel_fallback, mensagem
 
 
 def carregar_usuarios():
@@ -113,6 +281,15 @@ def auth_output_payload(status_msg, msg_bem_vindo, auth_visible, perfil_visible,
 def cadastrar(email, senha, nome, genero, familia, ocasiao, preco_max):
     if not email or not senha or not nome:
         return auth_output_payload("⚠️ Preencha e-mail, senha e nome.", "", True, False, None, None, None, [], None, 200)
+    
+    if not familia or len(familia) == 0:
+        return auth_output_payload("⚠️ Selecione pelo menos uma família olfativa.", "", True, False, None, None, None, [], None, 200)
+    
+    if not ocasiao:
+        return auth_output_payload("⚠️ Selecione uma ocasião de uso.", "", True, False, None, None, None, [], None, 200)
+    
+    if not genero:
+        return auth_output_payload("⚠️ Selecione um gênero de perfume.", "", True, False, None, None, None, [], None, 200)
     usuarios = carregar_usuarios()
     if email in usuarios:
         return auth_output_payload("⚠️ E-mail já cadastrado. Faça login.", "", True, False, None, None, None, [], None, 200)
@@ -195,6 +372,15 @@ def logout():
 def atualizar_perfil(email, genero, familia, ocasiao, preco_max):
     if not email:
         return "⚠️ Usuário não identificado.", gr.update(), genero, familia, ocasiao, preco_max
+    
+    if not familia or len(familia) == 0:
+        return "⚠️ Selecione pelo menos uma família olfativa.", gr.update(), genero, familia, ocasiao, preco_max
+    
+    if not ocasiao:
+        return "⚠️ Selecione uma ocasião de uso.", gr.update(), genero, familia, ocasiao, preco_max
+    
+    if not genero:
+        return "⚠️ Selecione um gênero de perfume.", gr.update(), genero, familia, ocasiao, preco_max
     usuarios = carregar_usuarios()
     usuarios[email]["genero"]    = genero
     usuarios[email]["familia"]   = familia
@@ -240,7 +426,7 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
     if not familias:
         return [gr.update(value="<p style='text-align:center;color:#888;padding:60px;'>Seu perfil não tem famílias olfativas cadastradas.</p>")] + out_cols + out_htmls + out_checks + out_nomes + [gr.update(visible=False)]
 
-    tops, aviso_expansao = recomendar_hibrido(familias, ocasiao, genero, preco_max)
+    tops, nivel_fallback, msg_fallback = recomendar_com_fallback(familias, ocasiao, genero, preco_max)
 
     for i in range(5):
         if i < len(tops):
@@ -304,13 +490,75 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
             out_checks[i] = gr.update(value=False)
             out_nomes[i] = str(r["nome"])
 
+    # Mensagem informatica sobre qualidade das recomendações
     aviso_html = ""
-    if aviso_expansao:
-        aviso_html = """
-        <div style="background:rgba(201,169,110,0.1);border:1px solid rgba(201,169,110,0.3);
-                    border-radius:8px;padding:10px 16px;margin-bottom:16px;text-align:center;">
-            <span style="color:#c9a96e;font-size:13px;">⚠️ Poucos perfumes do gênero selecionado combinam com essa família olfativa.
-            As recomendações foram expandidas para todos os gêneros.</span>
+    if nivel_fallback == 0:
+        aviso_html = f"""
+        <div style="background:linear-gradient(135deg,rgba(76,175,80,0.15),rgba(76,175,80,0.05));
+                    border:2px solid #4caf50;border-radius:12px;padding:16px;margin-bottom:20px;">
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+                <div style="font-size:24px;flex-shrink:0;">✨</div>
+                <div>
+                    <div style="color:#4caf50;font-size:14px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
+                        Recomendações Personalizadas
+                    </div>
+                    <p style="color:#8a7f9e;font-size:12px;line-height:1.5;margin:0;">
+                        Estes perfumes foram selecionados especialmente para você com base em seu perfil e nas preferências de usuários similares. 💎
+                    </p>
+                </div>
+            </div>
+        </div>
+        """
+    elif nivel_fallback > 0:
+        mensagens_por_nivel = {
+            1: {
+                "titulo": "Ocasião Restritiva",
+                "icone": "⏰",
+                "dica": "Tente escolher uma ocasião mais comum (ex: diurno casual) para mais opções.",
+            },
+            2: {
+                "titulo": "Gênero Cruzado",
+                "icone": "✨",
+                "dica": "Seu perfil é raro. Mostrando perfumes similares de outros gêneros que combinam com sua preferência.",
+            },
+            3: {
+                "titulo": "Sem Match com Critérios",
+                "icone": "📌",
+                "dica": "Nenhuma combinação ideal foi encontrada. Mostrando os perfumes mais populares da comunidade.",
+            }
+        }
+        
+        info = mensagens_por_nivel.get(nivel_fallback, {})
+        icone = info.get("icone", "⚠️")
+        titulo = info.get("titulo", "Aviso")
+        dica = info.get("dica", msg_fallback)
+        
+        cor_mapa = {
+            1: "#ffc107",  # amarelo
+            2: "#ff6b6b",  # vermelho suave
+            3: "#29b6f6"   # azul
+        }
+        cor = cor_mapa.get(nivel_fallback, "#c9a96e")
+        
+        aviso_html = f"""
+        <div style="background:linear-gradient(135deg,rgba({int(cor[1:3], 16)},{int(cor[3:5], 16)},{int(cor[5:7], 16)},0.15),rgba({int(cor[1:3], 16)},{int(cor[3:5], 16)},{int(cor[5:7], 16)},0.05));
+                    border:2px solid {cor};border-radius:12px;padding:16px;margin-bottom:20px;box-shadow:0 4px 12px rgba(0,0,0,0.2);">
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+                <div style="font-size:24px;flex-shrink:0;line-height:1;">{icone}</div>
+                <div style="flex:1;">
+                    <div style="color:{cor};font-size:14px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
+                        ⚡ {titulo}
+                    </div>
+                    <p style="color:#8a7f9e;font-size:12px;line-height:1.5;margin:0 0 8px 0;">
+                        {dica}
+                    </p>
+                    <div style="background:rgba({int(cor[1:3], 16)},{int(cor[3:5], 16)},{int(cor[5:7], 16)},0.15);padding:8px 12px;border-left:3px solid {cor};border-radius:4px;">
+                        <span style="color:#8a7f9e;font-size:11px;line-height:1.4;">
+                            <b>💡 Dica:</b> Recomendações abaixo do ideal detectadas. Considere ajustar suas preferências ou avaliar perfumes para melhorar futuras sugestões.
+                        </span>
+                    </div>
+                </div>
+            </div>
         </div>
         """
 
@@ -515,13 +763,13 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
                         login_msg = gr.Markdown()
                         
                     with gr.Tab("📝 Criar Conta"):
-                        gr.Markdown("### Cadastre seu perfil olfativo")
-                        cad_email = gr.Textbox(label="📧 E-mail", placeholder="seu@email.com")
-                        cad_senha = gr.Textbox(label="🔒 Senha", type="password", placeholder="Sua senha")
-                        cad_nome = gr.Textbox(label="👤 Nome", placeholder="Seu nome")
-                        cad_genero = gr.Radio(GENEROS, label="🧬 Gênero dos perfumes", value="feminino")
-                        cad_familias = gr.CheckboxGroup(FAMILIAS, label="🌸 Famílias olfativas preferidas", value=["floral"])
-                        cad_ocasiao = gr.Radio(OCASIOES, label="📍 Ocasião de uso", value="diurno-casual")
+                        gr.Markdown(r"### Cadastre seu perfil olfativo" + "\n" + r"*Campos marcados com * são obrigatórios")
+                        cad_email = gr.Textbox(label="📧 E-mail *", placeholder="seu@email.com")
+                        cad_senha = gr.Textbox(label="🔒 Senha *", type="password", placeholder="Sua senha")
+                        cad_nome = gr.Textbox(label="👤 Nome *", placeholder="Seu nome")
+                        cad_genero = gr.Radio(GENEROS, label="🧬 Gênero dos perfumes *", value="feminino")
+                        cad_familias = gr.CheckboxGroup(FAMILIAS, label="🌸 Famílias olfativas preferidas *", value=["floral"])
+                        cad_ocasiao = gr.Radio(OCASIOES, label="📍 Ocasião de uso *", value="diurno casual")
                         cad_preco_max = gr.Slider(50, 350, value=200, step=10, label="💰 Preço máximo (R$)")
                         btn_cadastrar = gr.Button("Cadastrar Perfil", variant="primary")
                         cad_msg = gr.Markdown()
@@ -531,9 +779,10 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
                 gr.HTML("<p style='text-align:center;color:#8a7f9e;font-size:14px;margin:20px 0;'>Navegue para a aba <b>🛍️ Minha Vitrine</b> para gerar suas recomendações!</p>")
 
                 with gr.Accordion("✏️ Editar Preferências", open=False):
-                    edit_genero   = gr.Radio(GENEROS, label="🧬 Gênero dos perfumes", value="feminino")
-                    edit_familias = gr.CheckboxGroup(FAMILIAS, label="🌸 Famílias olfativas preferidas")
-                    edit_ocasiao  = gr.Radio(OCASIOES, label="📍 Ocasião de uso")
+                    gr.Markdown("<p style='color:#c9a96e;font-size:12px;'><b>*</b> Campo obrigatório</p>")
+                    edit_genero   = gr.Radio(GENEROS, label="🧬 Gênero dos perfumes *", value="feminino")
+                    edit_familias = gr.CheckboxGroup(FAMILIAS, label="🌸 Famílias olfativas preferidas *", value=["floral"])
+                    edit_ocasiao  = gr.Radio(OCASIOES, label="📍 Ocasião de uso *", value="diurno casual")
                     edit_preco    = gr.Slider(50, 350, value=200, step=10, label="💰 Preço máximo (R$)")
                     btn_salvar_perfil = gr.Button("💾 Salvar Preferências", variant="primary")
                     msg_editar_perfil = gr.Markdown("")
