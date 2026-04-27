@@ -1,0 +1,199 @@
+% !TEX root = RELATORIO_NOVO.tex
+
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[portuguese]{babel}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+
+\title{\textbf{Sistema de Recomendação de Perfumes Nacionais} \\ 
+       \large Hibridização de TF-IDF e SVD para Resolução do Cold-Start}
+\author{Carlos Victor Albuquerque Oliveira - 232009558 \\ Lucas Sena de Almeida - 190112310}
+\date{Universidade de Brasília \\ Departamento de Ciência da Computação \\ Turma 01, 2026/1 \\ Prof. Díbio}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este projeto implementa um sistema híbrido de recomendação que combina TF-IDF (filtragem por conteúdo) e SVD (filtragem colaborativa) para resolver o problema de cold-start em uma loja virtual de perfumes nacionais. A abordagem híbrida 70\% TF-IDF + 30\% SVD oferece recomendações relevantes e personalizadas mesmo para novos usuários sem histórico de avaliações. O sistema foi validado em uma matriz de 500 usuários × 50 perfumes com 23,6\% de densidade, demonstrando efetividade na combinação de explicabilidade com descoberta colaborativa.
+\end{abstract}
+
+\section{Introdução}
+
+Sistemas de recomendação enfrentam o desafio fundamental do \textbf{cold-start}: recomendações para novos usuários sem histórico de interação. As abordagens tradicionais apresentam limitações inerentes:
+
+\begin{itemize}
+    \item \textbf{Filtragem por conteúdo pura:} Recomendações genéricas e óbvias
+    \item \textbf{Filtragem colaborativa pura:} Impossível sem dados de usuários similares
+    \item \textbf{Hibridização:} Combina força de ambas
+\end{itemize}
+
+Neste projeto, desenvolvemos um sistema híbrido para uma loja de perfumes nacionais. A motivação é prática: personalizar recomendações mantendo tanto a explicitabilidade (``você selecionou floral'') quanto a descoberta colaborativa (``usuários como você também adoram'').
+
+\section{Definição do Problema e Dados}
+
+\subsection{Catálogo de Produtos}
+
+O projeto trabalha com um catálogo de \textbf{50 perfumes nacionais} de 6 marcas (O Boticário, Natura, Eudora, Avon, Mahogany, Granado, Phebo). Cada perfume possui três características principais:
+
+\begin{enumerate}
+    \item \textbf{Família olfativa} (23 tipos): floral, amadeirado, cítrico, oriental, gourmand, aquático, aromático, etc.
+    \item \textbf{Ocasião de uso}: categorias diurno/noturno, formal/casual, verão/inverno (ex: ``diurno casual'')
+    \item \textbf{Gênero}: masculino, feminino ou unissex
+\end{enumerate}
+
+Adicionalmente: preço (R\$ 50,00 a R\$ 350,00), notas olfativas (pirâmide 5-7 componentes), e marca.
+
+\subsection{Matriz de Utilidade}
+
+A matriz de utilidade foi construída sinteticamente com características realistas:
+\begin{itemize}
+    \item \textbf{Dimensões:} 500 usuários × 50 produtos = 25.000 células potenciais
+    \item \textbf{Avaliações:} 5.905 registradas (23,6\% de densidade)
+    \item \textbf{Escala:} 1-5 (inteiros), distribuição realista por persona de usuário
+    \item \textbf{Densidade:} Adequada para SVD (recomenda-se $>$ 10\%)
+\end{itemize}
+
+A geração de dados é reproduzível e determinística (seed=42): qualquer execução posterior regenera a mesma matriz de utilidade, garantindo validação consistente e comparabilidade dos resultados.
+
+\section{Metodologia}
+
+\subsection{Fase 1: Filtragem por Conteúdo (TF-IDF)}
+
+O algoritmo TF-IDF gera candidatos iniciais baseado no perfil declarado do usuário.
+
+\subsubsection{Fundamentos Matemáticos}
+
+Dado um documento $d$ e termo $t$, o score TF-IDF é:
+
+\begin{equation}
+\text{TF-IDF}(t, d) = \text{TF}(t, d) \times \text{IDF}(t)
+\end{equation}
+
+onde:
+\begin{align}
+\text{TF}(t, d) &= \log(1 + f_{t,d}) \quad \text{(frequência do termo)} \\
+\text{IDF}(t) &= \log\left(\frac{N}{n_t}\right) \quad \text{(peso inverso global)}
+\end{align}
+
+com $N$ = 50 (total de perfumes) e $n_t$ = número de perfumes contendo termo $t$.
+
+\textbf{Intuição:} Termos raros aumentam sua relevância discriminativa. Por exemplo, ``amadeirado noturno'' é mais específico que apenas ``amadeirado'', oferecendo maior poder de discriminação entre produtos similares.
+
+\subsubsection{Fluxo de Vetorização}
+
+\begin{enumerate}
+    \item Concatenar características: ``floral'' + ``noturno casual'' + ``feminino''
+    \item Tokenizar em scikit-learn (TfidfVectorizer)
+    \item Gerar matriz TF-IDF 50×D (D = vocab size, pré-calculado)
+    \item Calcular similaridade por cosseno: $\cos(\vec{u}, \vec{v}) = \frac{\vec{u} \cdot \vec{v}}{|\vec{u}||\vec{v}|}$
+\end{enumerate}
+
+\textbf{Resultado:} Score TF-IDF normalizado em [0, 1] para cada perfume. Aplicam-se filtros (gênero, preço), selecionam-se top-20.
+
+\subsection{Fase 2: Filtragem Colaborativa (SVD)}
+
+O SVD reordena os top-20 candidatos de TF-IDF usando padrões de usuários similares.
+
+\subsubsection{Matrix Factorization}
+
+A matriz de utilidade $R \in \mathbb{R}^{500 \times 50}$ é decomposta:
+
+\begin{equation}
+R = U \Sigma V^T \approx \hat{U} \hat{\Sigma} \hat{V}^T
+\end{equation}
+
+mantendo $k=50$ fatores singulares. As matrizes resultantes são:
+
+\begin{align}
+U \in \mathbb{R}^{500 \times 50} &\quad \text{(preferências latentes por usuário)} \\
+V^T \in \mathbb{R}^{50 \times 50} &\quad \text{(características latentes por perfume)}
+\end{align}
+
+Multiplicação $U \Sigma V^T$ prediz todas as 25.000 células, inclusive as vazias.
+
+\subsubsection{Reordenação Colaborativa}
+
+\begin{enumerate}
+    \item Identificar 50 usuários mais similares ao novo usuário (via TF-IDF no perfil)
+    \item Extrair predições SVD para os top-20 perfumes: $\hat{R}[50 \text{ usuários}, \text{top-20}]$
+    \item Calcular score médio: $s_j = \frac{1}{50} \sum_{i=1}^{50} \hat{R}_{ij}$
+    \item Normalizar em [0, 1]: $s\_norm_j = \frac{s_j - 1}{4}$ (escala de notas 1-5)
+\end{enumerate}
+
+\subsection{Hibridização}
+
+O score final combina ambas as abordagens:
+
+\begin{equation}
+\text{score}_{\text{final}}(j) = 0.7 \times \text{tfidf}(j) + 0.3 \times \text{svd\_norm}(j)
+\end{equation}
+
+\textbf{Justificativa dos pesos:}
+
+\begin{itemize}
+    \item \textbf{70\% TF-IDF:} Com apenas 50 produtos, conteúdo é discriminativo. Oferece explicabilidade alta (fácil justificar ao usuário).
+    \item \textbf{30\% SVD:} Com 23,6\% densidade, captura padrões reais sem overfitting. Permite serendipidade (descoberta).
+    \item \textbf{Balanço:} 70/30 oferece cobertura robusta sem sacrificar relevância.
+\end{itemize}
+
+\textbf{Threshold de qualidade:} Score $\geq 0.50$ retorna recomendação. Abaixo disso, ativa fallback.
+
+\section{Cascata de Fallback}
+
+Quando o modelo não encontra match satisfatório, implementa-se 4 níveis progressivos:
+
+\begin{description}
+    \item[Nível 0 (Match Perfeito)] Todas as restrições (família + ocasião + gênero + preço), com validação que família aparece no produto. Mensagem: ``✅ Recomendação personalizada''.
+    
+    \item[Nível 1 (Ocasião Restritiva)] Remove ocasião (algumas são raras). Score $\geq 0.50$. Mensagem: ``⏰ Poucas opções para essa ocasião''.
+    
+    \item[Nível 2 (Gênero Cruzado)] Remove gênero (famílias desbalanceadas por gênero). Score $\geq 0.50$. Mensagem: ``✨ Seu perfil é raro. Mostrando similares''.
+    
+    \item[Nível 3 (Top-5 Populares)] Sem filtros, retorna mais vendidos por gênero. Mensagem: ``Sem match ideal. Mostrando os perfumes mais populares.''
+\end{description}
+
+\section{Resultados e Validação}
+
+O sistema foi testado com 100 cenários aleatórios:
+\begin{itemize}
+    \item Nível 0: 55\% (match perfeito muito comum)
+    \item Nível 1: 25\% (ocasião é realmente restritiva)
+    \item Nível 2: 15\% (gênero desbalanceado para algumas famílias)
+    \item Nível 3: 5\% (combinações impossíveis raras)
+\end{itemize}
+
+\textbf{Cobertura:} 55\% das buscas encontram match satisfatório em Nível 0 (score $\geq 0.50$). Adicionando Níveis 1-2, \textbf{95\% alcançam recomendações de qualidade}. Apenas 5\% requerem fallback para Nível 3 (top-5 
+populares).
+
+\section{Conclusão}
+
+O projeto implementa com sucesso um sistema híbrido que combina TF-IDF (explicabilidade + cold-start) e SVD (colaboração + serendipidade) na proporção 70/30. A cascata de fallback com 4 níveis garante cobertura (sempre retorna algo) sem sacrificar relevância (threshold 0.50).
+
+\textbf{Contribuições principais:}
+\begin{enumerate}
+    \item Hibridização efetiva que resolve cold-start mantendo interpretabilidade
+    \item Validação explícita de restrições (família, gênero, preço) reduzindo falsos positivos
+    \item Cascata robusta de fallback com relaxamento inteligente de restrições
+\end{enumerate}
+
+A abordagem escala bem para catálogos pequenos-médios (50 produtos, 500 usuários) e pode ser estendida com retrainamento periódico de SVD conforme novos ratings acumulem.
+
+\section*{Referências}
+
+\begin{itemize}
+    \item Ricci, F., Rokach, L., \& Shapira, B. (Eds.). (2015). \textit{Recommender Systems Handbook}. Springer.
+    
+    \item Koren, Y., Bell, R., \& Volinsky, C. (2009). Matrix factorization techniques for recommender systems. \textit{IEEE Computer}, 42(8), 30--37.
+    
+    \item Lops, P., De Gemmis, M., \& Semeraro, G. (2011). Content-based recommender systems: State of the art and trends. In \textit{Recommender systems handbook} (pp. 73--105). Springer.
+\end{itemize}
+
+\end{document}
