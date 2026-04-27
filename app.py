@@ -417,6 +417,10 @@ def atualizar_perfil(email, genero, familia, ocasiao, preco_max):
 
 import base64
 
+def formatar_estrelas(nota):
+    arredondado = int(round(nota))
+    return "★" * arredondado + "☆" * (5 - arredondado)
+
 def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
     out_cols = [gr.update(visible=False)] * 5
     out_htmls = [gr.update(value="")] * 5
@@ -434,7 +438,7 @@ def gerar_vitrine(nome, genero, familias, ocasiao, preco_max):
             idx, score, nota_svd = tops[i]
             r = df_produtos.iloc[idx]
             
-            stars = "★" * int(round(nota_svd)) + "☆" * (5 - int(round(nota_svd)))
+            stars = formatar_estrelas(nota_svd)
             notas = r["notas_olfativas"].split(", ")
             notas_html = "".join(f'<span style="background:rgba(201,169,110,0.15);color:#c9a96e;padding:2px 8px;border-radius:20px;font-size:11px;margin:2px;">{n}</span>' for n in notas[:4])
 
