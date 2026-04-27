@@ -553,6 +553,8 @@ FEEDBACK_CSV  = BASE / "dados" / "feedback.csv"
 
 import pandas as pd
 import joblib
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 # import dos modelos e dos produtos
 df_produtos = pd.read_csv(BASE / "dados" / "produtos_processados.csv")
@@ -1165,5 +1167,4 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
 # %%
 # executa a interface inline no Jupyter (a célula anterior deve ter sido executada)
 demo.launch()
-
 # %%
