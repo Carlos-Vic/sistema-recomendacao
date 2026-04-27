@@ -13,7 +13,7 @@
 # ## Instalação das dependências
 
 # %%
-#pip install pandas scikit-learn scipy seaborn matplotlib gradio joblib
+#pip install pandas scikit-learn scipy seaborn matplotlib gradio joblib numpy
 
 # %% [markdown]
 # ## 1. Carregamento dos dados
