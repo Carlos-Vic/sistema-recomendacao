@@ -61,7 +61,7 @@ A matriz de utilidade foi construída sinteticamente com características realis
     \item \textbf{Densidade:} Adequada para SVD (recomenda-se $>$ 10\%)
 \end{itemize}
 
-A geração de dados é reproduzível e determinística (seed=42): qualquer execução posterior regenera a mesma matriz de utilidade, garantindo validação consistente e comparabilidade dos resultados.
+A geração de dados é reproduzível e determinística (seed=42): qualquer execução posterior regenera a mesma matriz de utilidade, garantindo validação consistente e comparabilidade dos resultados. Os dados foram gerados com auxílio de IA (Claude, Anthropic) pelo script \texttt{gerar\_dados.py}, que simula personas de usuários com preferências de família olfativa, ocasião e gênero, atribuindo notas com base no grau de compatibilidade entre o perfil da persona e as características do perfume. Todo o código-fonte, dados e modelos estão disponíveis e comentados no repositório: \texttt{https://github.com/Carlos-Vic/sistema-recomendacao}.
 
 \section{Metodologia}
 
@@ -145,12 +145,12 @@ O score final combina ambas as abordagens:
 Quando o modelo não encontra match satisfatório, implementa-se 4 níveis progressivos:
 
 \begin{description}
-    \item[Nível 0 (Match Perfeito)] Todas as restrições (família + ocasião + gênero + preço), com validação que família aparece no produto. Mensagem: ``✅ Recomendação personalizada''.
-    
-    \item[Nível 1 (Ocasião Restritiva)] Remove ocasião (algumas são raras). Score $\geq 0.50$. Mensagem: ``⏰ Poucas opções para essa ocasião''.
-    
-    \item[Nível 2 (Gênero Cruzado)] Remove gênero (famílias desbalanceadas por gênero). Score $\geq 0.50$. Mensagem: ``✨ Seu perfil é raro. Mostrando similares''.
-    
+    \item[Nível 0 (Match Perfeito)] Todas as restrições (família + ocasião + gênero + preço), com validação que família aparece no produto. Mensagem: ``Recomendação personalizada''.
+
+    \item[Nível 1 (Ocasião Restritiva)] Remove ocasião (algumas são raras). Score $\geq 0.50$. Mensagem: ``Poucas opções para essa ocasião''.
+
+    \item[Nível 2 (Gênero Cruzado)] Remove gênero (famílias desbalanceadas por gênero). Score $\geq 0.50$. Mensagem: ``Seu perfil é raro. Mostrando similares''.
+
     \item[Nível 3 (Top-5 Populares)] Sem filtros, retorna mais vendidos por gênero. Mensagem: ``Sem match ideal. Mostrando os perfumes mais populares.''
 \end{description}
 
@@ -182,6 +182,8 @@ O sistema foi testado com 100 cenários aleatórios:
 A aplicação foi desenvolvida em \textbf{Gradio} e é executada no Jupyter Notebook. Para iniciar:
 
 \begin{enumerate}
+    \item \textbf{Instalar Dependências:} Execute a célula de instalação no início do notebook: \texttt{\%pip install pandas scikit-learn scipy seaborn matplotlib gradio joblib}
+
     \item \textbf{Inicializar o Backend:} Execute \textbf{todas as células do Tópico 5} (``app.py'') do notebook. Isso carrega os modelos (TF-IDF, SVD) e inicia a interface web.
     
     \item \textbf{Cadastro/Login:} Insira e-mail, senha e nome. Defina suas preferências: gênero, famílias olfativas preferidas, ocasião de uso e orçamento máximo.
@@ -193,7 +195,7 @@ A aplicação foi desenvolvida em \textbf{Gradio} e é executada no Jupyter Note
     \item \textbf{Feedback:} Avalie os perfumes com notas (1-5) e comentários opcionais. Dados salvos em \texttt{feedback.csv}.
 \end{enumerate}
 
-\textbf{Mensagens Visuais:} O sistema comunica transparentemente o nível de fallback acionado (Nível 0 = match perfeito ✨, Níveis 1-3 = relaxamento progressivo de restrições).
+\textbf{Mensagens Visuais:} O sistema comunica transparentemente o nível de fallback acionado (Nível 0 = match perfeito, Níveis 1-3 = relaxamento progressivo de restrições).
 
 \section{Conclusão}
 
