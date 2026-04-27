@@ -50,7 +50,7 @@ cd sistema-recomendacao
 ### 1. Instalar dependências
 
 ```bash
-pip install pandas scikit-learn scipy seaborn matplotlib gradio joblib
+pip install pandas scikit-learn scipy seaborn matplotlib gradio joblib numpy
 ```
 
 ### 2. Gerar os dados
