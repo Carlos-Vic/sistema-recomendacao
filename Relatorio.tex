@@ -173,6 +173,24 @@ O sistema foi testado com 100 cenários aleatórios:
 \textbf{Cobertura:} 55\% das buscas encontram match satisfatório em Nível 0 (score $\geq 0.50$). Adicionando Níveis 1-2, \textbf{95\% alcançam recomendações de qualidade}. Apenas 5\% requerem fallback para Nível 3 (top-5 
 populares).
 
+\section{Como Usar}
+
+A aplicação foi desenvolvida em \textbf{Gradio} e é executada no Jupyter Notebook. Para iniciar:
+
+\begin{enumerate}
+    \item \textbf{Inicializar o Backend:} Execute \textbf{todas as células do Tópico 5} (``app.py'') do notebook. Isso carrega os modelos (TF-IDF, SVD) e inicia a interface web.
+    
+    \item \textbf{Cadastro/Login:} Insira e-mail, senha e nome. Defina suas preferências: gênero, famílias olfativas preferidas, ocasião de uso e orçamento máximo.
+    
+    \item \textbf{Minha Vitrine:} Clique para visualizar top-5 perfumes recomendados. Cada card exibe: imagem, marca, família olfativa, notas, avaliação (★), preço e percentual de match.
+    
+    \item \textbf{Pedido:} Marque os perfumes desejados e clique em ``Confirmar Pedido''.
+    
+    \item \textbf{Feedback:} Avalie os perfumes com notas (1-5) e comentários opcionais. Dados salvos em \texttt{feedback.csv}.
+\end{enumerate}
+
+\textbf{Mensagens Visuais:} O sistema comunica transparentemente o nível de fallback acionado (Nível 0 = match perfeito ✨, Níveis 1-3 = relaxamento progressivo de restrições).
+
 \section{Conclusão}
 
 O projeto implementa com sucesso um sistema híbrido que combina TF-IDF (explicabilidade + cold-start) e SVD (colaboração + serendipidade) na proporção 70/30. A cascata de fallback com 4 níveis garante cobertura (sempre retorna algo) sem sacrificar relevância (threshold 0.50).
