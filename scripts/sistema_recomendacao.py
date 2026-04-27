@@ -551,6 +551,15 @@ BASE          = Path("..").resolve()
 USUARIOS_JSON = BASE / "usuarios.json"
 FEEDBACK_CSV  = BASE / "dados" / "feedback.csv"
 
+import pandas as pd
+import joblib
+
+# import dos modelos e dos produtos
+df_produtos = pd.read_csv(BASE / "dados" / "produtos_processados.csv")
+vectorizer  = joblib.load(BASE / "modelos" / "tfidf_vectorizer.pkl")
+vectorized  = joblib.load(BASE / "modelos" / "tfidf_matrix.pkl")
+pred_matrix = joblib.load(BASE / "modelos" / "svd_pred_matrix.pkl")
+
 # listas para os widgets do Gradio — derivadas do catálogo já carregado em memória
 FAMILIAS = sorted(df_produtos["familia_olfativa"].unique().tolist())
 OCASIOES = sorted(df_produtos["ocasiao"].unique().tolist())
@@ -1156,3 +1165,5 @@ with gr.Blocks(css=CUSTOM_CSS, title="O Bot-icário — Parfumerie IA") as demo:
 # %%
 # executa a interface inline no Jupyter (a célula anterior deve ter sido executada)
 demo.launch()
+
+# %%

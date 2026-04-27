@@ -10,7 +10,7 @@
 \usepackage{booktabs}
 \usepackage{float}
 
-\geometry{margin=2.5cm}
+\geometry{margin=2cm}
 
 \title{\textbf{Sistema de Recomendação de Perfumes Nacionais} \\ 
        \large Hibridização de TF-IDF e SVD para Resolução do Cold-Start}
@@ -41,12 +41,12 @@ Neste projeto, desenvolvemos um sistema híbrido para uma loja de perfumes nacio
 
 \subsection{Catálogo de Produtos}
 
-O projeto trabalha com um catálogo de \textbf{50 perfumes nacionais} de 6 marcas (O Boticário, Natura, Eudora, Avon, Mahogany, Granado, Phebo). Cada perfume possui três características principais:
+O projeto trabalha com um catálogo de \textbf{50 perfumes nacionais} de 7 marcas (O Boticário, Natura, Eudora, Avon, Mahogany, Granado, Phebo). Cada perfume possui três características principais:
 
 \begin{enumerate}
     \item \textbf{Família olfativa} (23 tipos): floral, amadeirado, cítrico, oriental, gourmand, aquático, aromático, etc.
     \item \textbf{Ocasião de uso}: categorias diurno/noturno, formal/casual, verão/inverno (ex: ``diurno casual'')
-    \item \textbf{Gênero}: masculino, feminino ou unissex
+    \item \textbf{Gênero}: masculino ou feminino
 \end{enumerate}
 
 Adicionalmente: preço (R\$ 50,00 a R\$ 350,00), notas olfativas (pirâmide 5-7 componentes), e marca.
@@ -110,11 +110,11 @@ A matriz de utilidade $R \in \mathbb{R}^{500 \times 50}$ é decomposta:
 R = U \Sigma V^T \approx \hat{U} \hat{\Sigma} \hat{V}^T
 \end{equation}
 
-mantendo $k=50$ fatores singulares. As matrizes resultantes são:
+mantendo $k=15$ fatores singulares. As matrizes resultantes são:
 
 \begin{align}
-U \in \mathbb{R}^{500 \times 50} &\quad \text{(preferências latentes por usuário)} \\
-V^T \in \mathbb{R}^{50 \times 50} &\quad \text{(características latentes por perfume)}
+U \in \mathbb{R}^{500 \times 15} &\quad \text{(preferências latentes por usuário)} \\
+V^T \in \mathbb{R}^{15 \times 50} &\quad \text{(características latentes por perfume)}
 \end{align}
 
 Multiplicação $U \Sigma V^T$ prediz todas as 25.000 células, inclusive as vazias.
@@ -136,13 +136,7 @@ O score final combina ambas as abordagens:
 \text{score}_{\text{final}}(j) = 0.7 \times \text{tfidf}(j) + 0.3 \times \text{svd\_norm}(j)
 \end{equation}
 
-\textbf{Justificativa dos pesos:}
-
-\begin{itemize}
-    \item \textbf{70\% TF-IDF:} Com apenas 50 produtos, conteúdo é discriminativo. Oferece explicabilidade alta (fácil justificar ao usuário).
-    \item \textbf{30\% SVD:} Com 23,6\% densidade, captura padrões reais sem overfitting. Permite serendipidade (descoberta).
-    \item \textbf{Balanço:} 70/30 oferece cobertura robusta sem sacrificar relevância.
-\end{itemize}
+\textbf{Justificativa dos pesos:} 70\% TF-IDF pois com 50 produtos o conteúdo é altamente discriminativo e oferece explicabilidade ao usuário. 30\% SVD captura padrões colaborativos sem overfitting dado a densidade de 23,6\%.
 
 \textbf{Threshold de qualidade:} Score $\geq 0.50$ retorna recomendação. Abaixo disso, ativa fallback.
 
@@ -162,6 +156,18 @@ Quando o modelo não encontra match satisfatório, implementa-se 4 níveis progr
 
 \section{Resultados e Validação}
 
+\subsection{Métricas do SVD}
+
+O modelo SVD foi avaliado com divisão treino/teste (80\%/20\%), obtendo:
+
+\begin{itemize}
+    \item \textbf{RMSE:} 0,6092 — erro médio de menos de 1 estrela na escala 1–5
+    \item \textbf{Variância explicada:} 51,8\% com $k=15$ fatores latentes
+\end{itemize}
+
+
+\subsection{Distribuição do Fallback}
+
 O sistema foi testado com 100 cenários aleatórios:
 \begin{itemize}
     \item Nível 0: 55\% (match perfeito muito comum)
@@ -170,8 +176,6 @@ O sistema foi testado com 100 cenários aleatórios:
     \item Nível 3: 5\% (combinações impossíveis raras)
 \end{itemize}
 
-\textbf{Cobertura:} 55\% das buscas encontram match satisfatório em Nível 0 (score $\geq 0.50$). Adicionando Níveis 1-2, \textbf{95\% alcançam recomendações de qualidade}. Apenas 5\% requerem fallback para Nível 3 (top-5 
-populares).
 
 \section{Como Usar}
 
@@ -195,14 +199,7 @@ A aplicação foi desenvolvida em \textbf{Gradio} e é executada no Jupyter Note
 
 O projeto implementa com sucesso um sistema híbrido que combina TF-IDF (explicabilidade + cold-start) e SVD (colaboração + serendipidade) na proporção 70/30. A cascata de fallback com 4 níveis garante cobertura (sempre retorna algo) sem sacrificar relevância (threshold 0.50).
 
-\textbf{Contribuições principais:}
-\begin{enumerate}
-    \item Hibridização efetiva que resolve cold-start mantendo interpretabilidade
-    \item Validação explícita de restrições (família, gênero, preço) reduzindo falsos positivos
-    \item Cascata robusta de fallback com relaxamento inteligente de restrições
-\end{enumerate}
-
-A abordagem escala bem para catálogos pequenos-médios (50 produtos, 500 usuários) e pode ser estendida com retrainamento periódico de SVD conforme novos ratings acumulem.
+As contribuições principais são: hibridização efetiva que resolve cold-start mantendo interpretabilidade, validação explícita de restrições reduzindo falsos positivos, e cascata robusta de fallback com relaxamento inteligente. A abordagem escala bem para catálogos pequenos-médios e pode ser estendida com retreinamento periódico do SVD conforme novos ratings acumulem.
 
 \section*{Referências}
 
